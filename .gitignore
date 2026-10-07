@@ -1,0 +1,24 @@
+# Build output
+bin/
+obj/
+artifacts/
+*.nupkg
+*.snupkg
+
+# Test results
+TestResults/
+*.trx
+
+# A local checkout of the conformance suite
+/conformance/
+
+# IDE noise
+.vs/
+.idea/
+*.user
+*.suo
+.vscode/
+*.DotSettings.user
+
+# OS noise
+.DS_Store
