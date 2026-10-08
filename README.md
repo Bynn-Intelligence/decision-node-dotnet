@@ -137,7 +137,7 @@ var d = await dn.DecideAsync(
 
 Local bytes are checked on your machine before any request: JPEG, PNG or WebP by their first bytes (a `mediaType` you give must match them), at most 10 MB, at most 40 megapixels read from the image header without decoding it, at most 4 images in a request (URLs included), and ids unique. A request that breaks one of these rules throws `BadRequestError` with nothing sent. No image is resized or re-encoded.
 
-Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect. A `PUT` refused because its URL's five minutes ran out is presigned again once.
+Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect. A `PUT` refused because its URL's five minutes ran out is presigned again once. Each `PUT` attempt has its own timeout, `uploadTimeout` (60 seconds by default), apart from the API's `timeout`.
 
 Uploads are remembered by content in the client's memory (at most 256, least recently used out first) until 5 minutes before they expire, so an image you send again, in a later call, in `DecideManyAsync` or in a session frame, goes by its `upload_id` whatever its size. If the server answers that an upload the library placed has expired or was used up, the library uploads it again and sends the request once more. `UploadAsync(images)` uploads whatever the size and returns each `upload_id`, which any key of the workspace can name for an hour.
 
@@ -176,7 +176,7 @@ await foreach (var ev in session.RepliesAsync())
 | `RepliesAsync()`, `ReadAsync()` | `Reply` and `FrameError` values in order, ending with the `SessionClosed`. A frame error is a value, never thrown. A reply that superseded frames lists their `seq` in `Dropped` |
 | `EndAsync()` | Ends the session (`DELETE`); one already ended counts as success |
 
-The library answers the server's pings itself. `SessionClosed.Reopen` is true for the codes after which opening the session again is right (`1001`, `1006`, `1011`, `4404`, `4408`, `4409`, `4410`). A key that already holds its most open sessions gets `SessionLimitError`, a `RateLimitError` that is never retried.
+The WebSocket connects through the client's `HttpClient`, so a proxy or certificate setting you configured on it applies to sessions too. The library answers the server's pings itself. `SessionClosed.Reopen` is true for the codes after which opening the session again is right (`1001`, `1006`, `1011`, `4404`, `4408`, `4409`, `4410`). A key that already holds its most open sessions gets `SessionLimitError`, a `RateLimitError` that is never retried.
 
 `SuperviseAsync(body, feed, onReply)` runs all of that for a long-lived feed: it opens and connects, sends each reading of an `IAsyncEnumerable<SessionFrame>`, calls `onReply` as each reply arrives, reopens on the reopen codes (`4410` at once, the others after a capped backoff with jitter), connects again to the same session on `1013`, and stops on any other code. When the feed ends it waits up to 3 seconds for outstanding replies, ends the session and returns the last `SessionClosed`, or `null`.
 
@@ -200,7 +200,7 @@ await foreach (var r in run.Results)
 
 `RunBatchAsync(requests, pollInterval, timeout)` creates an empty draft, adds the requests in calls of at most 10 MiB, finalizes the batch, polls it every `pollInterval` (default 60 seconds, at least 10; the server's `Retry-After` when it asks for longer) until it ends, and returns the ended `Batch` with its results. Past `timeout` (default 26 hours) it throws `TimeoutException`. If adding fails, the draft is cancelled and the error thrown.
 
-`dn.Batches` has each call on its own: `CreateAsync(requests)`, `AddAsync(id, requests)`, `FinalizeAsync(id)`, `GetAsync(id)`, `ListAsync(offset, limit)`, `ResultsAsync(id)` and `CancelAsync(id)`. Requests go as JSON Lines, each with its `custom_id`, its model and its state; a request's images follow the inline threshold for that line alone. `ResultsAsync` reads the results line by line as they arrive: each `BatchResult` holds a `Decision` for a `200` line, the `Error` its status and body give (a value, never thrown) for any other, or neither for a line that never ran (`Outcome` `expired` or `cancelled`).
+`dn.Batches` has each call on its own: `CreateAsync(requests)`, `AddAsync(id, requests)`, `FinalizeAsync(id)`, `GetAsync(id)`, `ListAsync(offset, limit)`, `ResultsAsync(id)` and `CancelAsync(id)`. Requests go as JSON Lines, each with its `custom_id`, its model and its state; a request's images follow the inline threshold for that line alone. `ResultsAsync` reads the whole results file line by line as it arrives, never holding it whole; the client's `timeout` covers each wait for more of it. Each `BatchResult` holds a `Decision` for a `200` line, the `Error` its status and body give (a value, never thrown) for any other, or neither for a line that never ran (`Outcome` `expired` or `cancelled`).
 
 Create, add and finalize change the batch, so they are retried only on `429` and `529`, which the API answers before applying anything, and never after a timeout or a lost answer. A finalize answered `409` is read back with `GetAsync`: when the batch is no longer a draft, an earlier finalize went through and the batch is returned.
 
@@ -259,7 +259,20 @@ The library checks every fixed rule the API documents before sending, so a reque
 - `ValidationError` with the server's exact `Entries` for a question without a type or with fields of the wrong type, a state that is not a string, an object or an array, a number grid the API cannot build (`min` above `max`, a `step` not above 0, more than 6 decimals, beyond 2^53, more than 4,096 values), and a session `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600.
 - `BadRequestError` with `ErrorType` `api_usage_error` for an unknown question type (a number question on `SystemoneAsync` included), a request nested more than 128 levels deep, an image fault (see Images), a frame fault (see Sessions), a batch request without a unique `custom_id` or an empty add, and `ListAsync` paging out of range; `image_url_refused` for an image URL with user information, a port other than 443, or a literal private address.
 
-Limits only `/v1/models` states, such as whether a model answers number questions or serves sessions, its session window, `requests_per_batch` and `max_custom_id_chars`, are checked once you have called `ModelsAsync()` on the client, and left to the server otherwise. Token limits stay the server's, because they differ by model.
+Limits only `/v1/models` states, such as whether a model answers number questions or serves sessions, its session window, `requests_per_batch` and `max_custom_id_chars`, are checked once you have called `ModelsAsync()` on the client, and left to the server otherwise. A model is found in that list by its name, its alias (`decisionnode-latest`) or its pinned version. Token limits stay the server's, because they differ by model.
+
+To run the same checks without sending, for example to validate input as it is entered, call `CheckRequest(request)` (a `DecideRequest` or `SessionOptions`), `CheckSystemoneRequest(request)`, `Batches.CheckCreate(requests)`, `Batches.CheckAdd(requests)` or `session.CheckFrame(...)`. Each throws exactly what the call would throw and returns when the call would be sent; nothing is sent and nothing uploaded.
+
+```csharp
+try
+{
+    dn.CheckRequest(new DecideRequest { State = form, Questions = questions, Images = images });
+}
+catch (ValidationError e)
+{
+    foreach (var entry in e.Entries!) Console.WriteLine(entry!["msg"]);
+}
+```
 
 A bad argument throws .NET's own `ArgumentException` (or its subclasses `ArgumentNullException` and `ArgumentOutOfRangeException`), never a DecisionNode error: an empty question map, a value that cannot be serialised, an unreadable image file, a base URL that is not `https`, a `timeout` that is not above zero, a negative `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a `pollInterval` below 10 seconds, an `HttpClient` that cannot be shown to refuse redirects (including one with a `DelegatingHandler` you have not declared safe), and an `HttpClient` that replaces the certificate check for an `https` base URL. A missing key is an `AuthenticationError`, also before anything is sent.
 
@@ -281,6 +294,7 @@ Your `CancellationToken` cancels the whole call, retries included, and surfaces 
 | Timeout per attempt | `timeout` (above zero) | | 10 seconds |
 | Retries | `maxRetries` (0 or more) | | 2 |
 | Inline threshold | `inlineThreshold` (0 or more) | | 524,288 bytes |
+| Timeout per image upload attempt | `uploadTimeout` (above zero) | | 60 seconds |
 | Extra headers | `headers` | | none |
 | HTTP client | `httpClient` | | one the client creates and owns |
 
@@ -333,7 +347,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.5); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.6); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 
