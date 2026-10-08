@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using static Bynn.DecisionNode.Conformance.Compare;
@@ -41,86 +43,245 @@ public sealed class ConformanceTests
     {
         var c = Suite.Load("requests", id);
         var session = NewSession();
-        using var client = Driver.MakeClient(c["client"] as JsonObject, c["env"] as JsonObject, _mock.Url, new Dictionary<string, string> { ["x-mock-session"] = session });
+        var extra = new Dictionary<string, string> { ["x-mock-session"] = session };
+        if (c["mock"] is JsonObject)
+        {
+            extra["x-mock-scenario"] = "request/" + id;
+        }
+        using var client = Driver.MakeClient(c["client"] as JsonObject, c["env"] as JsonObject, _mock.Url, extra);
         var result = await Driver.InvokeAsync(client, (JsonObject)c["call"]!);
-        if (result is DecisionNodeError error)
+        await DisposeResult(result);
+        if (result is Exception error)
         {
             throw Fail($"the call failed: {error.GetType().Name}: {error.Message}");
         }
+        await Task.Delay(20);
 
         var log = (JsonArray)(await _mock.RequestsAsync(session))["requests"]!;
-        if (log.Count != 1)
+        var exp = (JsonObject)c["expect"]!;
+        if (exp["request"] is JsonObject one)
         {
-            throw Fail($"expected 1 request, the mock received {log.Count}");
+            if (log.Count != 1)
+            {
+                throw Fail($"expected 1 request, the mock received {log.Count}: {Describe(log)}");
+            }
+            CheckRequest(one, (JsonObject)log[0]!, "request");
         }
-        var got = (JsonObject)log[0]!;
-        var exp = (JsonObject)c["expect"]!["request"]!;
-        Assert.Equal((string)exp["method"]!, (string)got["method"]!);
-        Assert.Equal((string)exp["path"]!, (string)got["path"]!);
+        else
+        {
+            CheckRequestList((JsonArray)exp["requests"]!, log);
+        }
+    }
+
+    private static string Describe(JsonArray log) => string.Join(", ", log.Select(r => $"{r!["method"]} {r["path"]}"));
+
+    private static void CheckRequestList(JsonArray expected, JsonArray log)
+    {
+        if (log.Count != expected.Count)
+        {
+            throw Fail($"expected {expected.Count} requests, the mock received {log.Count}: {Describe(log)}");
+        }
+        var i = 0;
+        while (i < expected.Count)
+        {
+            if ((bool?)expected[i]!["parallel"] != true)
+            {
+                CheckRequest((JsonObject)expected[i]!, (JsonObject)log[i]!, $"requests[{i}]");
+                i++;
+                continue;
+            }
+            var j = i;
+            while (j < expected.Count && (bool?)expected[j]!["parallel"] == true)
+            {
+                j++;
+            }
+            // Requests sent in parallel may arrive in any order: one assignment must hold.
+            var reasons = new List<string>();
+            var matched = false;
+            foreach (var perm in Permutations(Enumerable.Range(i, j - i).ToList()))
+            {
+                try
+                {
+                    for (var k = 0; k < perm.Count; k++)
+                    {
+                        CheckRequest((JsonObject)expected[i + k]!, (JsonObject)log[perm[k]]!, $"requests[{i + k}]");
+                    }
+                    matched = true;
+                    break;
+                }
+                catch (Xunit.Sdk.XunitException miss)
+                {
+                    reasons.Add(miss.Message);
+                }
+            }
+            if (!matched)
+            {
+                throw Fail("no order of the parallel requests matches: " + reasons[0]);
+            }
+            i = j;
+        }
+    }
+
+    private static IEnumerable<List<int>> Permutations(List<int> items)
+    {
+        if (items.Count <= 1)
+        {
+            yield return items;
+            yield break;
+        }
+        for (var i = 0; i < items.Count; i++)
+        {
+            var rest = items.Where((_, k) => k != i).ToList();
+            foreach (var tail in Permutations(rest))
+            {
+                yield return new List<int> { items[i] }.Concat(tail).ToList();
+            }
+        }
+    }
+
+    private static Dictionary<string, string> ParseQuery(string? query)
+    {
+        var q = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in (query ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var eq = pair.IndexOf('=');
+            var key = Uri.UnescapeDataString((eq < 0 ? pair : pair[..eq]).Replace('+', ' '));
+            var value = eq < 0 ? string.Empty : Uri.UnescapeDataString(pair[(eq + 1)..].Replace('+', ' '));
+            q.TryAdd(key, value);
+        }
+        return q;
+    }
+
+    private static List<JsonNode?> ParseJsonLines(string text)
+    {
+        var stripped = text.Trim();
+        if (stripped.Length == 0)
+        {
+            return new List<JsonNode?>();
+        }
+        if (stripped.StartsWith('['))
+        {
+            return ((JsonArray)JsonNode.Parse(stripped)!).ToList();
+        }
+        return text.Split('\n').Where(l => l.Trim().Length > 0).Select(l => JsonNode.Parse(l)).ToList();
+    }
+
+    /// <summary>One recorded request against one expectation, as the suite's README describes.</summary>
+    private static void CheckRequest(JsonObject exp, JsonObject got, string where, bool anyBody = false)
+    {
+        var method = (string)got["method"]!;
+        var path = (string)got["path"]!;
+        if (method != (string)exp["method"]!)
+        {
+            throw Fail($"{where} method: expected {exp["method"]}, got {method} {path}");
+        }
+        if (exp["path"] is { } p && (string)p! != path)
+        {
+            throw Fail($"{where} path: expected {p}, got {path}");
+        }
+        if (exp["path_pattern"] is { } pattern && !Regex.IsMatch(path, (string)pattern!))
+        {
+            throw Fail($"{where} path: {path} does not match {pattern}");
+        }
+        if (exp["query"] is JsonObject query)
+        {
+            var have = ParseQuery((string?)got["query"]);
+            var want = query.ToDictionary(kv => kv.Key, kv => (string)kv.Value!);
+            if (have.Count != want.Count || want.Any(kv => !have.TryGetValue(kv.Key, out var v) || v != kv.Value))
+            {
+                throw Fail($"{where} query: expected {query.ToJsonString()}, got {string.Join("&", have.Select(kv => kv.Key + "=" + kv.Value))}");
+            }
+        }
+        if (exp["status"] is { } status && (int?)got["status"] != (int)status)
+        {
+            throw Fail($"{where} status: the mock answered {got["status"]}, expected {status}");
+        }
         var headers = (JsonObject)got["headers"]!;
         foreach (var (name, value) in exp["headers"] as JsonObject ?? new JsonObject())
         {
             var actual = (string?)headers[name.ToLowerInvariant()];
             if (actual != (string)value!)
             {
-                throw Fail($"header {name}: expected '{value}', got '{actual}'");
+                throw Fail($"{where} header {name}: expected '{value}', got '{actual}'");
             }
         }
-        foreach (var (name, pattern) in exp["header_patterns"] as JsonObject ?? new JsonObject())
+        foreach (var (name, pattern2) in exp["header_patterns"] as JsonObject ?? new JsonObject())
         {
             var actual = (string?)headers[name.ToLowerInvariant()];
-            if (actual is null || !Regex.IsMatch(actual, (string)pattern!))
+            if (actual is null || !Regex.IsMatch(actual, (string)pattern2!))
             {
-                throw Fail($"header {name}: '{actual}' does not match {pattern}");
+                throw Fail($"{where} header {name}: '{actual}' does not match {pattern2}");
             }
         }
         foreach (var name in exp["absent_headers"] as JsonArray ?? new JsonArray())
         {
             if (headers.ContainsKey(((string)name!).ToLowerInvariant()))
             {
-                throw Fail($"header {name} must not be sent");
+                throw Fail($"{where} header {name} must not be sent");
             }
         }
-
+        if (exp["body_base64"] is { } b64)
+        {
+            if ((string?)got["body_base64"] != (string)b64!)
+            {
+                throw Fail($"{where} body: the bytes differ from the expected bytes");
+            }
+            return;
+        }
+        if (exp["body_sha256"] is { } sha)
+        {
+            var bytes = Convert.FromBase64String((string?)got["body_base64"] ?? string.Empty);
+            var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            if (digest != (string)sha!)
+            {
+                throw Fail($"{where} body: sha256 {digest}, expected {sha}");
+            }
+            return;
+        }
         var bodyText = (string?)got["body_text"] ?? string.Empty;
-        var body = bodyText.Length > 0 ? JsonNode.Parse(bodyText) : null;
+        if (exp["jsonl"] is JsonArray jsonl)
+        {
+            var lines = new JsonArray(ParseJsonLines(bodyText).Select(l => l?.DeepClone()).ToArray());
+            if (!Same(Canon(jsonl), Canon(lines)))
+            {
+                throw Fail($"{where} body lines: expected {Short(jsonl)}, got {Short(lines)}");
+            }
+            return;
+        }
+        if (exp.ContainsKey("jsonl_count") || exp.ContainsKey("jsonl_checks"))
+        {
+            var lines = ParseJsonLines(bodyText);
+            if (exp["jsonl_count"] is { } count && lines.Count != (int)count)
+            {
+                throw Fail($"{where} body: expected {count} lines, got {lines.Count}");
+            }
+            foreach (var check in (exp["jsonl_checks"] as JsonArray ?? new JsonArray()).Cast<JsonObject>())
+            {
+                var line = (int)check["line"]!;
+                if (line >= lines.Count)
+                {
+                    throw Fail($"{where} body: no line {line}");
+                }
+                CheckValue(check, lines[line], null, $"{where} line {line}");
+            }
+            return;
+        }
+        var needsBody = exp.ContainsKey("body") || exp.ContainsKey("body_checks") || exp.ContainsKey("ordered_keys");
+        var body = needsBody && bodyText.Length > 0 ? JsonNode.Parse(bodyText) : null;
         if (exp.ContainsKey("body"))
         {
             if (!Same(Canon(exp["body"]), body))
             {
-                throw Fail($"body: expected {Short(exp["body"])}, got {Short(body)}");
+                throw Fail($"{where} body: expected {Short(exp["body"])}, got {Short(body)}");
             }
         }
-        else if (!exp.ContainsKey("body_checks") && bodyText.Length > 0)
+        else if (!exp.ContainsKey("body_checks") && bodyText.Length > 0 && !anyBody)
         {
-            throw Fail($"expected no body, got {bodyText}");
+            throw Fail($"{where} expected no body, got {(bodyText.Length < 200 ? bodyText : bodyText[..197] + "...")}");
         }
-        foreach (var checkNode in exp["body_checks"] as JsonArray ?? new JsonArray())
+        foreach (var check in (exp["body_checks"] as JsonArray ?? new JsonArray()).Cast<JsonObject>())
         {
-            var check = (JsonObject)checkNode!;
-            var ptr = (string)check["pointer"]!;
-            var (found, value) = Pointer(body, ptr);
-            if (!found)
-            {
-                throw Fail($"body{ptr}: missing");
-            }
-            if (check.ContainsKey("equals") && !Same(Canon(check["equals"]), value))
-            {
-                throw Fail($"body{ptr}: expected {Short(check["equals"])}, got {Short(value)}");
-            }
-            if (check["type"] is { } type && !IsType(value, (string)type!))
-            {
-                throw Fail($"body{ptr}: expected a {type}");
-            }
-            if (check["keys"] is JsonArray keys)
-            {
-                var want = keys.Select(k => (string)k!).ToList();
-                var have = KeyOrder(bodyText, ptr);
-                if (!want.SequenceEqual(have))
-                {
-                    throw Fail($"body{ptr}: keys expected [{string.Join(", ", want)}], got [{string.Join(", ", have)}]");
-                }
-            }
+            CheckValue(check, body, bodyText, where);
         }
         foreach (var ptrNode in exp["ordered_keys"] as JsonArray ?? new JsonArray())
         {
@@ -129,7 +290,47 @@ public sealed class ConformanceTests
             var have = KeyOrder(bodyText, ptr);
             if (!want.SequenceEqual(have))
             {
-                throw Fail($"body{ptr}: key order expected [{string.Join(", ", want)}], got [{string.Join(", ", have)}]");
+                throw Fail($"{where} body{ptr}: key order expected [{string.Join(", ", want)}], got [{string.Join(", ", have)}]");
+            }
+        }
+    }
+
+    private static void CheckValue(JsonObject check, JsonNode? body, string? bodyText, string where)
+    {
+        var ptr = (string)check["pointer"]!;
+        var (found, value) = Pointer(body, ptr);
+        if ((bool?)check["absent"] == true)
+        {
+            if (found)
+            {
+                throw Fail($"{where} body{ptr}: must be absent, got {Short(value)}");
+            }
+            return;
+        }
+        if (!found)
+        {
+            throw Fail($"{where} body{ptr}: missing");
+        }
+        if (check.ContainsKey("equals") && !Same(Canon(check["equals"]), Canon(value)))
+        {
+            throw Fail($"{where} body{ptr}: expected {Short(check["equals"])}, got {Short(value)}");
+        }
+        if (check["type"] is { } type && !IsType(value, (string)type!))
+        {
+            throw Fail($"{where} body{ptr}: expected a {type}");
+        }
+        if (check["pattern"] is { } pattern
+            && !(value is JsonValue v && v.GetValueKind() == JsonValueKind.String && Regex.IsMatch((string)v!, (string)pattern!)))
+        {
+            throw Fail($"{where} body{ptr}: {Short(value)} does not match {pattern}");
+        }
+        if (check["keys"] is JsonArray keys)
+        {
+            var want = keys.Select(k => (string)k!).ToList();
+            var have = bodyText is not null ? KeyOrder(bodyText, ptr) : (value as JsonObject)?.Select(kv => kv.Key).ToList() ?? new List<string>();
+            if (!want.SequenceEqual(have))
+            {
+                throw Fail($"{where} body{ptr}: keys expected [{string.Join(", ", want)}], got [{string.Join(", ", have)}]");
             }
         }
     }
@@ -148,7 +349,8 @@ public sealed class ConformanceTests
             ["x-mock-scenario"] = "response/" + id,
         });
         var result = await Driver.InvokeAsync(client, (JsonObject)c["call"]!);
-        if (result is DecisionNodeError error)
+        await DisposeResult(result);
+        if (result is Exception error)
         {
             throw Fail($"the call failed: {error.GetType().Name}: {error.Message}");
         }
@@ -177,9 +379,88 @@ public sealed class ConformanceTests
                 throw Fail($"raw: expected {Short(exp["raw"])}, got {Short(got)}");
             }
         }
+        else if (exp["batch"] is { } batch)
+        {
+            Match(Canon(batch), Canon(Driver.Batch((Batch)result!)), "batch");
+        }
+        else if (exp["batch_page"] is { } page)
+        {
+            Match(Canon(page), Canon(Driver.Page((BatchPage)result!)), "batch_page");
+        }
+        else if (exp["batch_results"] is JsonArray results)
+        {
+            CheckBatchResults(results, (List<BatchResult>)result!, "batch_results");
+        }
+        else if (exp["session"] is { } sessionExp)
+        {
+            Match(Canon(sessionExp), Canon(Driver.Session((Session)result!)), "session");
+        }
+        else if (exp["upload_ids"] is { } ids)
+        {
+            var got = Driver.Normalise(result);
+            if (!Same(Canon(ids), Canon(got)))
+            {
+                throw Fail($"upload_ids: expected {Short(ids)}, got {Short(got)}");
+            }
+        }
         else
         {
             throw Fail("the case has no expectation this runner knows");
+        }
+    }
+
+    private static void CheckBatchResults(JsonArray expected, List<BatchResult> results, string path)
+    {
+        if (results.Count != expected.Count)
+        {
+            throw Fail($"{path}: expected {expected.Count} results, got {results.Count}");
+        }
+        for (var i = 0; i < results.Count; i++)
+        {
+            var spec = (JsonObject)expected[i]!;
+            var r = results[i];
+            var where = $"{path}[{i}]";
+            if (spec.ContainsKey("custom_id") && !Same(Canon(spec["custom_id"]), JsonValue.Create(r.CustomId)))
+            {
+                throw Fail($"{where}.custom_id: expected {Short(spec["custom_id"])}, got {r.CustomId}");
+            }
+            if (spec.ContainsKey("status"))
+            {
+                JsonNode? status = r.Status is { } code ? JsonValue.Create(code) : JsonValue.Create(r.Outcome);
+                if (!Same(Canon(spec["status"]), Canon(status)))
+                {
+                    throw Fail($"{where}.status: expected {Short(spec["status"])}, got {Short(status)}");
+                }
+            }
+            if (spec["headers"] is JsonObject headers)
+            {
+                var got = new JsonObject();
+                foreach (var (k, v) in r.Headers)
+                {
+                    got[k] = v;
+                }
+                Match(Canon(headers), got, where + ".headers");
+            }
+            if (spec.ContainsKey("decision"))
+            {
+                if (r.Decision is null)
+                {
+                    throw Fail($"{where}: expected a decision, got none");
+                }
+                Match(Canon(spec["decision"]), Canon(Driver.Decision(r.Decision)), where + ".decision");
+            }
+            if (spec["error"] is JsonObject error)
+            {
+                if (r.Error is null)
+                {
+                    throw Fail($"{where}: expected an error value, got none");
+                }
+                CheckError(error, r.Error, where + ".error");
+            }
+            if ((bool?)spec["no_decision"] == true && r.Decision is not null)
+            {
+                throw Fail($"{where}: expected no decision");
+            }
         }
     }
 
@@ -208,15 +489,16 @@ public sealed class ConformanceTests
         {
             result = await Driver.InvokeAsync(client, (JsonObject)c["call"]!);
         }
+        await DisposeResult(result);
         if (result is not DecisionNodeError error)
         {
-            throw Fail("no error was raised");
+            throw Fail("no error was raised" + (result is Exception other ? $" ({other.GetType().Name}: {other.Message})" : string.Empty));
         }
         CheckError(expected, error, "error");
         var log = (JsonArray)(await _mock.RequestsAsync(session))["requests"]!;
         if (log.Count != 1)
         {
-            throw Fail($"expected 1 attempt with max_retries 0, got {log.Count}");
+            throw Fail($"expected 1 attempt with max_retries 0, got {log.Count}: {Describe(log)}");
         }
     }
 
@@ -232,7 +514,7 @@ public sealed class ConformanceTests
         {
             if (!names.Contains(cls))
             {
-                throw Fail($"{path}: expected {cls} or a subclass, got {error.GetType().Name}");
+                throw Fail($"{path}: expected {cls} or a subclass, got {error.GetType().Name} ({error.Message})");
             }
         }
         else if (error.GetType().Name != cls)
@@ -272,8 +554,8 @@ public sealed class ConformanceTests
         var scheduled = new List<double>();
         if (client is not null && exp.ContainsKey("scheduled_waits_ms"))
         {
-            // Record each wait between attempts and return at once, so a capped 60 s wait
-            // is checked without spending it.
+            // Record each wait (between attempts, PUT retries, polls, reopens) and return at
+            // once, so a long wait is checked without spending it.
             client.Delay = (wait, _) =>
             {
                 lock (scheduled)
@@ -283,8 +565,34 @@ public sealed class ConformanceTests
                 return Task.CompletedTask;
             };
         }
+        var events = new List<JsonObject>();
+        var ctx = new Dictionary<string, object?>();
         var clock = Stopwatch.StartNew();
-        var result = client is null ? constructionError : await Driver.InvokeAsync(client, (JsonObject)c["call"]!);
+        object? result;
+        if (client is null)
+        {
+            result = constructionError;
+        }
+        else if (c["steps"] is JsonArray steps)
+        {
+            try
+            {
+                await RunSteps(steps, client, session, events, ctx);
+            }
+            finally
+            {
+                foreach (var s in ctx.Values.OfType<Session>())
+                {
+                    await s.DisposeAsync();
+                }
+            }
+            result = null;
+        }
+        else
+        {
+            result = await Driver.InvokeAsync(client, (JsonObject)c["call"]!);
+            await DisposeResult(result);
+        }
         var elapsed = clock.Elapsed.TotalMilliseconds;
         await Task.Delay(50); // let the mock finish recording dropped connections
 
@@ -298,11 +606,12 @@ public sealed class ConformanceTests
             {
                 try
                 {
-                    CheckAttemptsAndOutcome(alt, log.Count, result);
+                    CheckAttempts(alt, log);
+                    CheckOutcome((JsonObject)alt["outcome"]!, result, "outcome");
                     misses.Clear();
                     break;
                 }
-                catch (Exception miss) when (miss is Xunit.Sdk.XunitException)
+                catch (Xunit.Sdk.XunitException miss)
                 {
                     misses.Add(miss.Message);
                 }
@@ -312,9 +621,29 @@ public sealed class ConformanceTests
                 throw Fail("no alternative of one_of holds: " + string.Join("; ", misses));
             }
         }
-        else
+        else if (exp.ContainsKey("attempts"))
         {
-            CheckAttemptsAndOutcome(exp, log.Count, result);
+            CheckAttempts(exp, log);
+        }
+        if (exp["request_sequence"] is JsonArray sequence)
+        {
+            CheckSequence(sequence, log);
+        }
+        if (exp["request_counts"] is JsonArray counts)
+        {
+            CheckCounts(counts, log);
+        }
+        if (exp["session_events"] is JsonArray sessionEvents)
+        {
+            CheckEvents(sessionEvents, events);
+        }
+        if (exp["pongs"] is JsonObject pongs)
+        {
+            InRange(pongs, info["pongs"]!.GetValue<int>(), "pongs");
+        }
+        if (exp["one_of"] is null && exp["outcome"] is JsonObject outcome)
+        {
+            CheckOutcome(outcome, result, "outcome");
         }
         if (exp["results"] is JsonArray results)
         {
@@ -347,7 +676,7 @@ public sealed class ConformanceTests
         {
             if (scheduled.Count != waits.Count)
             {
-                throw Fail($"scheduled waits: expected {waits.Count}, the client scheduled {scheduled.Count}");
+                throw Fail($"scheduled waits: expected {waits.Count}, the client scheduled {scheduled.Count} ({string.Join(", ", scheduled.Select(w => w.ToString("0")))})");
             }
             for (var i = 0; i < waits.Count; i++)
             {
@@ -361,6 +690,170 @@ public sealed class ConformanceTests
             if (hits.Count > 0)
             {
                 throw Fail($"{path} was requested {hits.Count} time(s); it must not be requested at all");
+            }
+        }
+    }
+
+    private async Task RunSteps(JsonArray steps, DecisionNodeClient client, string session, List<JsonObject> events, Dictionary<string, object?> ctx)
+    {
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var step = (JsonObject)steps[i]!;
+            var where = $"steps[{i}]";
+            if (step["call"] is JsonObject call)
+            {
+                var result = await Driver.InvokeAsync(client, call, ctx);
+                if (step["outcome"] is JsonObject outcome)
+                {
+                    CheckOutcome(outcome, result, where + ".outcome");
+                }
+                else if (result is Exception error)
+                {
+                    throw Fail($"{where}: the call raised {error.GetType().Name}: {error.Message}");
+                }
+                if ((string?)step["save_as"] is { } name)
+                {
+                    ctx[name] = result;
+                }
+            }
+            else if ((string?)step["connect"] is { } connect)
+            {
+                await ((Session)ctx[connect]!).ConnectAsync();
+            }
+            else if (step["send"] is JsonObject send)
+            {
+                var s = (Session)ctx[(string)send["session"]!]!;
+                await s.SendAsync(Driver.Frame(send, ctx));
+            }
+            else if (step["read"] is JsonObject read)
+            {
+                var s = (Session)ctx[(string)read["session"]!]!;
+                var count = (int?)read["count"];
+                var timeout = TimeSpan.FromMilliseconds((int?)read["timeout_ms"] ?? 10000);
+                while (true)
+                {
+                    SessionEvent ev;
+                    try
+                    {
+                        using var cts = new CancellationTokenSource(timeout);
+                        ev = await s.ReadAsync(cts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw Fail($"{where}: no session event arrived in time ({events.Count} read so far)");
+                    }
+                    events.Add(Driver.Event(ev));
+                    if (ev is SessionClosed)
+                    {
+                        break;
+                    }
+                    if (count is not null && --count == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+            else if ((string?)step["end"] is { } end)
+            {
+                try
+                {
+                    await ((Session)ctx[end]!).EndAsync();
+                    events.Add(new JsonObject { ["ended"] = true });
+                }
+                catch (DecisionNodeError error)
+                {
+                    events.Add(new JsonObject { ["end_error"] = new JsonObject { ["class"] = error.GetType().Name, ["status"] = error.Status } });
+                }
+            }
+            else if ((string?)step["close"] is { } close)
+            {
+                await ((Session)ctx[close]!).CloseAsync();
+            }
+            else if (step["mock_clock"] is JsonObject mockClock)
+            {
+                await _mock.ClockAsync(session, mockClock);
+            }
+            else if (step["sleep_ms"] is { } sleep)
+            {
+                await Task.Delay((int)sleep);
+            }
+            else
+            {
+                throw Fail($"{where}: unknown step {string.Join(", ", step.Select(kv => kv.Key))}");
+            }
+        }
+    }
+
+    private static void CheckAttempts(JsonObject exp, JsonArray log)
+    {
+        var attempts = (int)exp["attempts"]!;
+        if (log.Count != attempts)
+        {
+            throw Fail($"attempts: expected {attempts}, the mock received {log.Count}: {Describe(log)}");
+        }
+    }
+
+    private static void CheckSequence(JsonArray expected, JsonArray log)
+    {
+        if (expected.Count != log.Count)
+        {
+            throw Fail($"request sequence: expected {expected.Count} requests, the mock received {log.Count}: {Describe(log)}");
+        }
+        for (var i = 0; i < expected.Count; i++)
+        {
+            var spec = (JsonObject)expected[i]!;
+            var rec = (JsonObject)log[i]!;
+            var checks = new JsonObject { ["method"] = spec["method"]!.DeepClone() };
+            foreach (var key in new[] { "path", "path_pattern", "status", "headers", "header_patterns", "absent_headers", "body_checks", "jsonl_count", "jsonl_checks", "body_base64", "body_sha256", "query" })
+            {
+                if (spec[key] is { } v)
+                {
+                    checks[key] = v.DeepClone();
+                }
+            }
+            CheckRequest(checks, rec, $"request sequence[{i}]", anyBody: true);
+        }
+    }
+
+    private static void CheckCounts(JsonArray expected, JsonArray log)
+    {
+        foreach (var spec in expected.Cast<JsonObject>())
+        {
+            var n = log.Count(r =>
+                (string?)r!["method"] == (string)spec["method"]!
+                && (spec["path"] is not { } p || (string?)r["path"] == (string)p!)
+                && (spec["path_pattern"] is not { } pp || Regex.IsMatch((string)r["path"]!, (string)pp!)));
+            var what = $"{spec["method"]} {spec["path"] ?? spec["path_pattern"]}";
+            if (spec["count"] is { } count && n != (int)count)
+            {
+                throw Fail($"{what}: expected {count} requests, got {n}");
+            }
+            InRange(spec, n, what);
+        }
+    }
+
+    private static void CheckEvents(JsonArray expected, List<JsonObject> events)
+    {
+        if (expected.Count != events.Count)
+        {
+            throw Fail($"session events: expected {expected.Count}, got {events.Count}: {string.Join(", ", events.Select(e => Short(e)))}");
+        }
+        for (var i = 0; i < expected.Count; i++)
+        {
+            var spec = (JsonObject)expected[i]!;
+            var ev = events[i];
+            var key = spec.First().Key;
+            if (ev.First().Key != key)
+            {
+                throw Fail($"session events[{i}]: expected {key}, got {Short(ev)}");
+            }
+            if (spec[key] is JsonObject fields)
+            {
+                Match(Canon(fields), Canon(ev[key]), $"session events[{i}].{key}");
+            }
+            else if (!Same(Canon(spec[key]), Canon(ev[key])))
+            {
+                throw Fail($"session events[{i}]: expected {Short(spec)}, got {Short(ev)}");
             }
         }
     }
@@ -385,18 +878,7 @@ public sealed class ConformanceTests
         }
     }
 
-    private static void CheckAttemptsAndOutcome(JsonObject exp, int received, object? result)
-    {
-        var attempts = (int)exp["attempts"]!;
-        if (received != attempts)
-        {
-            throw Fail($"attempts: expected {attempts}, the mock received {received}");
-        }
-        if (exp["outcome"] is JsonObject outcome)
-        {
-            CheckOutcome(outcome, result, "outcome");
-        }
-    }
+    // ------------------------------------------------------------------ outcomes
 
     private static void CheckOutcome(JsonObject spec, object? result, string path)
     {
@@ -404,27 +886,112 @@ public sealed class ConformanceTests
         {
             if (result is not ArgumentException)
             {
-                throw Fail($"{path}: expected an argument error, got {result?.GetType().Name ?? "null"}");
+                throw Fail($"{path}: expected an argument error, got {Describe(result)}");
             }
             return;
         }
-        if (spec.ContainsKey("result"))
+        if (result is ArgumentException unexpected)
         {
-            if (result is not Decision d)
+            throw Fail($"{path}: unexpected argument error: {unexpected.Message}");
+        }
+        if (spec["result"] is { } kindNode)
+        {
+            if (result is Exception error)
             {
-                throw Fail($"{path}: expected a decision, got {result}");
+                throw Fail($"{path}: expected {kindNode}, got {error.GetType().Name}: {error.Message}");
             }
-            if (spec["decision"] is { } decision)
+            switch ((string)kindNode!)
             {
-                Match(Canon(decision), Canon(Driver.Decision(d)), path + ".decision");
+                case "decision":
+                    if (result is not Decision d)
+                    {
+                        throw Fail($"{path}: expected a decision, got {Describe(result)}");
+                    }
+                    if (spec["decision"] is { } decision)
+                    {
+                        Match(Canon(decision), Canon(Driver.Decision(d)), path + ".decision");
+                    }
+                    break;
+                case "answer":
+                    Match(Canon(spec["answer"] ?? new JsonObject()), Canon(Driver.Answer((Answer)result!)), path + ".answer");
+                    break;
+                case "batch":
+                    Match(Canon(spec["batch"] ?? new JsonObject()), Canon(Driver.Batch((Batch)result!)), path + ".batch");
+                    break;
+                case "batch_page":
+                    Match(Canon(spec["batch_page"] ?? new JsonObject()), Canon(Driver.Page((BatchPage)result!)), path + ".batch_page");
+                    break;
+                case "batch_results":
+                    CheckBatchResults((JsonArray)spec["batch_results"]!, (List<BatchResult>)result!, path + ".batch_results");
+                    break;
+                case "batch_run":
+                    var run = (BatchRunResult)result!;
+                    Match(Canon(spec["batch"] ?? new JsonObject()), Canon(Driver.Batch(run.Batch)), path + ".batch");
+                    if (spec["batch_results"] is JsonArray runResults)
+                    {
+                        CheckBatchResults(runResults, run.Results, path + ".batch_results");
+                    }
+                    break;
+                case "session":
+                    Match(Canon(spec["session"] ?? new JsonObject()), Canon(Driver.Session((Session)result!)), path + ".session");
+                    break;
+                case "upload_ids":
+                    if (result is not IReadOnlyList<string> ids || (spec["count"] is { } count && ids.Count != (int)count))
+                    {
+                        throw Fail($"{path}: expected {spec["count"]} upload ids, got {Describe(result)}");
+                    }
+                    foreach (var uid in ids)
+                    {
+                        if (!Regex.IsMatch(uid, "^upl_[0-9a-f]{32}$"))
+                        {
+                            throw Fail($"{path}: '{uid}' is not an upload id");
+                        }
+                    }
+                    if (spec["distinct"] is { } distinct && (ids.Distinct().Count() == ids.Count) != (bool)distinct)
+                    {
+                        throw Fail($"{path}: upload ids {string.Join(", ", ids)}");
+                    }
+                    break;
+                case "supervised":
+                    if (result is not Supervised supervised)
+                    {
+                        throw Fail($"{path}: expected supervise to return, got {Describe(result)}");
+                    }
+                    InRange(spec["replies"] as JsonObject ?? new JsonObject(), supervised.Replies.OfType<Reply>().Count(), "replies");
+                    if (spec.ContainsKey("closed"))
+                    {
+                        JsonNode? got = supervised.Closed is null ? null : new JsonObject { ["code"] = supervised.Closed.Code, ["reopen"] = supervised.Closed.Reopen };
+                        if (!Same(Canon(spec["closed"]), Canon(got)))
+                        {
+                            throw Fail($"{path}.closed: expected {Short(spec["closed"])}, got {Short(got)}");
+                        }
+                    }
+                    break;
+                default:
+                    throw Fail($"{path}: unknown result kind {kindNode}");
             }
             return;
         }
-        if (result is not DecisionNodeError error)
+        if (result is not DecisionNodeError dnError)
         {
-            throw Fail($"{path}: expected {spec["error"]}, got a result");
+            throw Fail($"{path}: expected {spec["error"]}, got {Describe(result)}");
         }
-        CheckError(spec, error, path);
+        CheckError(spec, dnError, path);
+    }
+
+    private static string Describe(object? result) => result switch
+    {
+        null => "null",
+        Exception e => $"{e.GetType().Name}: {e.Message}",
+        _ => result.GetType().Name,
+    };
+
+    private static async Task DisposeResult(object? result)
+    {
+        if (result is Session s)
+        {
+            await s.DisposeAsync();
+        }
     }
 
     private static void InRange(JsonObject range, double value, string what)

@@ -23,7 +23,18 @@ public sealed class MockServer : IDisposable
         start.ArgumentList.Add("--port");
         start.ArgumentList.Add("0");
         _process = Process.Start(start) ?? throw new InvalidOperationException("the mock server did not start");
-        _process.ErrorDataReceived += (_, _) => { };
+        // DECISIONNODE_MOCK_LOG names a file that receives the mock's stderr, for diagnosing the mock.
+        var log = Environment.GetEnvironmentVariable("DECISIONNODE_MOCK_LOG");
+        _process.ErrorDataReceived += (_, e) =>
+        {
+            if (log is not null && e.Data is not null)
+            {
+                lock (_process)
+                {
+                    File.AppendAllText(log, e.Data + Environment.NewLine);
+                }
+            }
+        };
         _process.BeginErrorReadLine();
         var line = _process.StandardOutput.ReadLine() ?? string.Empty;
         const string prefix = "listening on ";
@@ -48,7 +59,20 @@ public sealed class MockServer : IDisposable
             query += "&path=" + Uri.EscapeDataString(path);
         }
         var text = await _http.GetStringAsync($"{Url}/_mock/requests?{query}");
-        return (JsonObject)JsonNode.Parse(text)!;
+        var info = (JsonObject)JsonNode.Parse(text)!;
+        // Pongs on a session's socket are counted for the pong cases, not as requests.
+        var all = (JsonArray)info["requests"]!;
+        info["pongs"] = all.Count(r => (string?)r!["method"] == "PONG");
+        info["requests"] = new JsonArray(all.Where(r => (string?)r!["method"] != "PONG").Select(r => r!.DeepClone()).ToArray());
+        return info;
+    }
+
+    /// <summary>Moves a session's clock: <c>{"advance_seconds": n}</c> or <c>{"offset_seconds": n}</c>.</summary>
+    public async Task ClockAsync(string session, JsonObject body)
+    {
+        using var content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+        using var response = await _http.PostAsync($"{Url}/_mock/clock?session={Uri.EscapeDataString(session)}", content);
+        response.EnsureSuccessStatusCode();
     }
 
     public void Dispose()
