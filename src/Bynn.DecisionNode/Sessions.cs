@@ -52,6 +52,7 @@ public sealed partial class DecisionNodeClient
         {
             body["ttl_seconds"] = ttl;
         }
+        LocalChecks.SessionOpen(body, Held(model));
         var (parsed, result) = await SendJsonAsync(HttpMethod.Post, "/v1/sessions", JsonValues.ToUtf8(body), JsonContentType, RetryPolicy.SessionOpen, cancellationToken).ConfigureAwait(false);
         if (parsed is not JsonObject raw || JsonValues.AsString(raw["session_id"]) is null || JsonValues.AsString(raw["stream_url"]) is null)
         {
@@ -716,7 +717,12 @@ public sealed class Session : IAsyncDisposable
     /// A frame's image follows the client's inline threshold: small bytes inline, large or
     /// already uploaded ones by <c>upload_id</c>. Returns the frame's <c>seq</c>.
     /// </summary>
-    /// <exception cref="BadRequestError">The image breaks a fixed rule, or is a URL (frames take none); nothing is sent.</exception>
+    /// <exception cref="BadRequestError">
+    /// The frame breaks a fixed rule (a <c>seq</c> out of range, no frame value and no image,
+    /// an empty or wrongly typed frame, an empty or unknown question list, nesting over 128,
+    /// an image that is a URL or breaks the image rules): nothing is written and no <c>seq</c>
+    /// is used. Its <c>ErrorType</c> is <c>api_usage_error</c>, as the server's frame error would be.
+    /// </exception>
     public Task<long> SendAsync(SessionFrame frame, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -733,22 +739,23 @@ public sealed class Session : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var socket = _socket ?? throw new InvalidOperationException("connect the session before sending");
+        // The frame's fixed rules, before anything is written: a refused frame takes no seq.
+        var frameNode = frame is null ? null : JsonValues.ToNode(frame, "the frame");
+        var asked = questions?.ToList();
+        LocalChecks.Frame(seq, frameNode, image is not null, asked, Questions);
         if (image is not null)
         {
             if (image.Url is not null)
             {
-                throw LocalChecks.BadRequest($"Image '{image.Id}': a frame's image takes bytes or an upload, not a url.", "api_usage_error");
+                throw LocalChecks.BadRequest("image: a frame takes bytes or an upload, not a url.", "api_usage_error");
             }
-            if (image.Fault() is { } fault)
-            {
-                throw LocalChecks.BadRequest(fault, "api_usage_error");
-            }
+            LocalChecks.One(image, _client.Held(Model));
         }
         var number = seq ?? Interlocked.Increment(ref _seq);
         var message = new JsonObject { ["seq"] = number };
-        if (frame is not null)
+        if (frameNode is not null)
         {
-            message["frame"] = JsonValues.ToNode(frame, "the frame");
+            message["frame"] = frameNode;
         }
         if (image is not null)
         {
@@ -758,9 +765,9 @@ public sealed class Session : IAsyncDisposable
             wires.Clear();
             message["image"] = wire;
         }
-        if (questions is not null)
+        if (asked is not null)
         {
-            message["questions"] = new JsonArray(questions.Select(q => (JsonNode?)JsonValue.Create(q)).ToArray());
+            message["questions"] = new JsonArray(asked.Select(q => (JsonNode?)JsonValue.Create(q)).ToArray());
         }
         if (reset is not null)
         {

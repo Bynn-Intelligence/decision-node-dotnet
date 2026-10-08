@@ -186,7 +186,7 @@ public sealed class Question
             throw new ArgumentOutOfRangeException(name, value, "a number question's bounds and step must be finite");
         }
         // Whole values are written as integers (5, not 5.0); others in their shortest form.
-        return value == Math.Floor(value) && Math.Abs(value) <= 9007199254740992d
+        return value == Math.Floor(value) && Math.Abs(value) < 9.2e18
             ? JsonValue.Create((long)value)
             : JsonValue.Create(value);
     }

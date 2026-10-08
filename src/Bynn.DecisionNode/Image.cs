@@ -244,8 +244,8 @@ public sealed class Image
     internal string CacheKey => Convert.ToBase64String(Sha256) + "|" + MediaType;
 
     /// <summary>
-    /// What is wrong with the image by the API's fixed rules, or <c>null</c>. Checked once:
-    /// the image is immutable.
+    /// What is wrong with the image's bytes (format, declared type, header, pixels), or
+    /// <c>null</c>. Checked once: the image is immutable.
     /// </summary>
     internal string? Fault()
     {
@@ -259,38 +259,25 @@ public sealed class Image
 
     private string? FindFault()
     {
-        if (Url is not null)
-        {
-            var ok = Url.Length <= LocalChecks.MaxUrlChars
-                && Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                && Uri.TryCreate(Url, UriKind.Absolute, out var uri)
-                && uri.Scheme == Uri.UriSchemeHttps
-                && uri.Host.Length > 0;
-            return ok ? null : $"Image '{Id}': only https URLs of at most {LocalChecks.MaxUrlChars} characters are accepted.";
-        }
         if (Data is not { } data)
         {
             return null;
         }
         if (DetectedMediaType is null)
         {
-            return $"Image '{Id}' is not a JPEG, PNG or WebP image.";
+            return $"Image {Id} is not a JPEG, PNG or WebP image.";
         }
         if (DeclaredMediaType is not null && DeclaredMediaType != DetectedMediaType)
         {
-            return $"Image '{Id}' could not be decoded as {DeclaredMediaType}.";
-        }
-        if (data.Length > LocalChecks.MaxImageBytes)
-        {
-            return $"Image '{Id}' is larger than 10 MB.";
+            return $"Image {Id} could not be decoded as {DeclaredMediaType}.";
         }
         if (ImageHeader.Dimensions(data.Span, DetectedMediaType) is not { } size)
         {
-            return $"Image '{Id}': its header cannot be read.";
+            return $"Image {Id}: its header cannot be read.";
         }
         if ((long)size.Width * size.Height > LocalChecks.MaxImagePixels)
         {
-            return $"Image '{Id}' is {size.Width}x{size.Height} pixels, over 40 megapixels.";
+            return $"Image {Id} is {size.Width}x{size.Height} pixels, over 40 megapixels.";
         }
         return null;
     }

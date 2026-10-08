@@ -54,10 +54,7 @@ public sealed partial class DecisionNodeClient
             {
                 throw new ArgumentException($"image '{image.Id}' is given by URL; a URL is sent as it is and never uploaded", nameof(images));
             }
-            if (image.Fault() is { } fault)
-            {
-                throw LocalChecks.BadRequest(fault, "api_usage_error");
-            }
+            LocalChecks.One(image, Held(null));
         }
         var ids = new string?[list.Count];
         var todo = new List<int>();
@@ -244,8 +241,43 @@ public sealed partial class DecisionNodeClient
                 distinct.Add(image);
             }
         }
+        var (uploads, urlsExpire) = await PresignAsync(distinct, ct).ConfigureAwait(false);
+        await Task.WhenAll(distinct.Select(async (image, i) =>
+        {
+            try
+            {
+                await PutAsync((JsonObject)uploads[i]!, image, ct).ConfigureAwait(false);
+            }
+            catch (DecisionNodeError error) when (error.Status == 403 && error.ErrorType == "upload_failed" && UtcNow() >= urlsExpire)
+            {
+                // The URL's minutes passed before its PUT arrived: presign this image again,
+                // once. A 403 inside them is a refusal and is raised as it is.
+                var (again, _) = await PresignAsync(new[] { image }, ct).ConfigureAwait(false);
+                uploads[i] = again[0]!.DeepClone();
+                await PutAsync((JsonObject)uploads[i]!, image, ct).ConfigureAwait(false);
+            }
+        })).ConfigureAwait(false);
+        var ids = new string[distinct.Count];
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            var upload = (JsonObject)uploads[i]!;
+            ids[i] = JsonValues.AsString(upload["upload_id"])!;
+            if (DateTimeOffset.TryParse(JsonValues.AsString(upload["expires_at"]), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var expires))
+            {
+                _uploads.Put(distinct[i].CacheKey, ids[i], expires);
+            }
+        }
+        return images.Select(image => ids[index[image.CacheKey]]).ToArray();
+    }
+
+    /// <summary>
+    /// One <c>POST /v1/uploads</c> for <paramref name="images"/>: one upload per file, and
+    /// when the URLs stop being usable, by the client's clock (<c>expires_in</c>, 300 s).
+    /// </summary>
+    private async Task<(JsonArray Uploads, DateTimeOffset UrlsExpire)> PresignAsync(IReadOnlyList<Image> images, CancellationToken ct)
+    {
         var files = new JsonArray();
-        foreach (var image in distinct)
+        foreach (var image in images)
         {
             files.Add(new JsonObject
             {
@@ -258,7 +290,7 @@ public sealed partial class DecisionNodeClient
         var request = JsonValues.ToUtf8(new JsonObject { ["files"] = files });
         var (body, result) = await SendJsonAsync(HttpMethod.Post, "/v1/uploads", request, JsonContentType, RetryPolicy.Default, ct).ConfigureAwait(false);
         if ((body as JsonObject)?["uploads"] is not JsonArray uploads
-            || uploads.Count != distinct.Count
+            || uploads.Count != images.Count
             || uploads.Any(u => u is not JsonObject o || JsonValues.AsString(o["upload_id"]) is null || JsonValues.AsString(o["url"]) is null))
         {
             throw new ServerError(new ErrorDetails
@@ -269,18 +301,8 @@ public sealed partial class DecisionNodeClient
                 Body = body,
             });
         }
-        await Task.WhenAll(distinct.Select((image, i) => PutAsync((JsonObject)uploads[i]!, image, ct))).ConfigureAwait(false);
-        var ids = new string[distinct.Count];
-        for (var i = 0; i < distinct.Count; i++)
-        {
-            var upload = (JsonObject)uploads[i]!;
-            ids[i] = JsonValues.AsString(upload["upload_id"])!;
-            if (DateTimeOffset.TryParse(JsonValues.AsString(upload["expires_at"]), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var expires))
-            {
-                _uploads.Put(distinct[i].CacheKey, ids[i], expires);
-            }
-        }
-        return images.Select(image => ids[index[image.CacheKey]]).ToArray();
+        var lifetime = JsonValues.TryDouble(body!["expires_in"], out var seconds) && seconds > 0 ? seconds : 300;
+        return (uploads, UtcNow().AddSeconds(lifetime));
     }
 
     /// <summary>

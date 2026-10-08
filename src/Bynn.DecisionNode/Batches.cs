@@ -45,7 +45,7 @@ public sealed partial class DecisionNodeClient
             throw new ArgumentOutOfRangeException(nameof(timeout), limit, "timeout must be above zero.");
         }
         // Every line is built and checked first, so a fault fails before the draft exists.
-        var prepared = Batches.Prepare(requests);
+        var prepared = Batches.Prepare(requests, allowEmpty: true);
 
         var draft = await Batches.CreateAsync(Array.Empty<BatchRequest>(), cancellationToken).ConfigureAwait(false);
         if (prepared.Count > 0)
@@ -117,7 +117,7 @@ public sealed class BatchesClient
     /// <exception cref="BadRequestError">A request breaks a fixed rule of the API; nothing is sent.</exception>
     public async Task<Batch> CreateAsync(IEnumerable<BatchRequest> requests, CancellationToken cancellationToken = default)
     {
-        var lines = await EncodeAsync(Prepare(requests), cancellationToken).ConfigureAwait(false);
+        var lines = await EncodeAsync(Prepare(requests, allowEmpty: true), cancellationToken).ConfigureAwait(false);
         var body = Join(lines, 0, lines.Count);
         var (parsed, result) = await _client.SendJsonAsync(HttpMethod.Post, "/v1/batches", body, NdJson, DecisionNodeClient.RetryPolicy.Mutation, cancellationToken).ConfigureAwait(false);
         return BatchOf(parsed, result);
@@ -127,15 +127,11 @@ public sealed class BatchesClient
     /// Adds requests to a draft (<c>POST /v1/batches/{id}/requests</c>), in calls of at most
     /// 10 MiB, in order. Returns the batch after the last call.
     /// </summary>
-    /// <exception cref="ArgumentException">No requests.</exception>
+    /// <exception cref="BadRequestError">No requests, or a request breaks a fixed rule; nothing is sent.</exception>
     public async Task<Batch> AddAsync(string batchId, IEnumerable<BatchRequest> requests, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(batchId);
-        var prepared = Prepare(requests);
-        if (prepared.Count == 0)
-        {
-            throw new ArgumentException("add needs at least one request", nameof(requests));
-        }
+        var prepared = Prepare(requests, allowEmpty: false);
         var lines = await EncodeAsync(prepared, cancellationToken).ConfigureAwait(false);
         return await AddLinesAsync(batchId, lines, cancellationToken).ConfigureAwait(false);
     }
@@ -199,8 +195,10 @@ public sealed class BatchesClient
     /// <param name="offset">The first batch, 0-based; the server's default (0) when <c>null</c>.</param>
     /// <param name="limit">How many, 1 to 100; the server's default (20) when <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the call, retries included.</param>
+    /// <exception cref="BadRequestError"><paramref name="offset"/> is below 0 or <paramref name="limit"/> outside 1 to 100; nothing is sent.</exception>
     public async Task<BatchPage> ListAsync(int? offset = null, int? limit = null, CancellationToken cancellationToken = default)
     {
+        LocalChecks.ListPage(offset, limit);
         var query = new List<string>();
         if (offset is { } o)
         {
@@ -273,27 +271,37 @@ public sealed class BatchesClient
     }
 
     /// <summary>Every request's line, checked by the API's fixed rules, before anything is sent.</summary>
-    internal List<(JsonObject Line, List<Image> Images)> Prepare(IEnumerable<BatchRequest> requests)
+    internal List<(JsonObject Line, List<Image> Images)> Prepare(IEnumerable<BatchRequest> requests, bool allowEmpty)
     {
         ArgumentNullException.ThrowIfNull(requests);
-        var prepared = new List<(JsonObject Line, List<Image> Images)>();
-        foreach (var request in requests)
+        var list = requests.ToList();
+        foreach (var request in list)
         {
             ArgumentNullException.ThrowIfNull(request, nameof(requests));
-            if (string.IsNullOrEmpty(request.CustomId))
-            {
-                throw new ArgumentException("a batch request needs a custom_id", nameof(requests));
-            }
+        }
+        // The call's custom_id rules first, then each line as a decide request.
+        LocalChecks.BatchLines(list.Select(r => r.CustomId).ToList(), allowEmpty, _client.Held(null));
+        var prepared = new List<(JsonObject Line, List<Image> Images)>();
+        foreach (var request in list)
+        {
             var qs = DecisionNodeClient.QuestionMap(request.Questions, nameof(requests));
             var images = DecisionNodeClient.ImageList(request.Images, nameof(requests));
-            LocalChecks.Images(images);
-            var line = new JsonObject
+            var model = string.IsNullOrEmpty(request.Model) ? _client.Model : request.Model;
+            var body = new JsonObject
             {
-                ["custom_id"] = request.CustomId,
-                ["model"] = string.IsNullOrEmpty(request.Model) ? _client.Model : request.Model,
+                ["model"] = model,
                 ["state"] = DecisionNodeClient.StateNode(request.State),
                 ["questions"] = qs,
             };
+            var held = _client.Held(model);
+            LocalChecks.Request(body, images.Count, LocalChecks.Decide, held);
+            LocalChecks.Images(images, held);
+            var line = new JsonObject { ["custom_id"] = request.CustomId };
+            foreach (var (key, value) in body.ToList())
+            {
+                body.Remove(key);
+                line[key] = value;
+            }
             prepared.Add((line, images));
         }
         return prepared;
@@ -358,7 +366,7 @@ public sealed class BatchesClient
 /// <summary>One request of a batch: a decide request plus its <see cref="CustomId"/>.</summary>
 public sealed class BatchRequest
 {
-    /// <summary>Your id for this request, unique within the batch, 1 to 512 characters. Results carry it.</summary>
+    /// <summary>Your id for this request, unique within the batch, 1 to 512 characters. Results carry it. A missing one is refused locally.</summary>
     public required string CustomId { get; init; }
 
     /// <summary>What is judged: a string or any JSON-serialisable value. <c>null</c> sends an empty state.</summary>

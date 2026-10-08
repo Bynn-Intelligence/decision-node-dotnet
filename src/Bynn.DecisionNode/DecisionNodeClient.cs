@@ -544,10 +544,26 @@ public sealed partial class DecisionNodeClient : IDisposable
         {
             throw new DecisionNodeError("the response of GET /v1/models has no 'models' list");
         }
-        return models.Select(m => m is JsonObject o
+        var list = models.Select(m => m is JsonObject o
             ? new ModelInfo(o)
             : throw new DecisionNodeError("an entry of 'models' is not a JSON object")).ToList();
+        // Held for the local checks: a limit only /v1/models states is checked once known.
+        var held = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var m in list)
+        {
+            if (m.Name is { } name)
+            {
+                held[name] = (JsonObject)m.Raw.DeepClone();
+            }
+        }
+        _held = held;
+        return list;
     }
+
+    private volatile Dictionary<string, JsonObject> _held = new(StringComparer.Ordinal);
+
+    /// <summary>The <c>/v1/models</c> entry of a model, when this client holds it from an earlier <see cref="ModelsAsync"/>.</summary>
+    internal JsonObject? Held(string? model) => _held.TryGetValue(NonEmpty(model) ?? Model, out var entry) ? entry : null;
 
     /// <summary>
     /// Sends <paramref name="body"/> to <c>POST /v1/decide</c> exactly as given and returns
@@ -610,17 +626,19 @@ public sealed partial class DecisionNodeClient : IDisposable
             }
         }
         var list = ImageList(images, nameof(images));
-        LocalChecks.Images(list);
         var body = new JsonObject
         {
             ["model"] = NonEmpty(model) ?? Model,
             ["state"] = StateNode(state),
             ["questions"] = qs,
         };
+        var held = Held(model);
+        LocalChecks.Request(body, list.Count, systemOne ? LocalChecks.SystemOne : LocalChecks.Decide, held);
+        LocalChecks.Images(list, held);
         return new PreparedRequest(body, list);
     }
 
-    /// <summary>The questions' wire forms, copied, after the fixed-limit checks.</summary>
+    /// <summary>The questions' wire forms, copied. The caller checks them with the request.</summary>
     internal static JsonObject QuestionMap(IReadOnlyDictionary<string, Question>? questions, string argument)
     {
         if (questions is null || questions.Count == 0)
@@ -636,7 +654,6 @@ public sealed partial class DecisionNodeClient : IDisposable
             }
             qs[id] = question.Wire.DeepClone();
         }
-        LocalChecks.Questions(qs);
         return qs;
     }
 

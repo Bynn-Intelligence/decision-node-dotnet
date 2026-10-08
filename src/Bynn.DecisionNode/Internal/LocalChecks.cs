@@ -1,15 +1,21 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Bynn.DecisionNode.Internal;
 
 /// <summary>
-/// The API's fixed request rules, checked on this machine before any request. A fault
-/// raises the class the API answers it with (<see cref="BadRequestError"/>, or
-/// <see cref="ValidationError"/> where the API answers <c>422</c>), with no status and no
-/// request id, so nothing is sent for a request the server would refuse. Token limits
-/// stay the server's: they differ by model version.
+/// Every fixed rule the API documents, checked on this machine before anything is sent,
+/// in the server's order: the nesting limit, then every <c>422</c> entry of the request,
+/// then the first <c>400</c> in question order, then the images. A fault raises what the
+/// server would answer: the same class, the same <c>error_type</c>, the documented message,
+/// and for a <c>422</c> a <see cref="ValidationError"/> whose entries are the server's list.
+/// A local error has no status and no request id; its <c>Reason</c> says what the server's
+/// <c>x-decisionnode-error</c> would. A rule whose value only <c>GET /v1/models</c> states is
+/// checked against the value the client holds from an earlier <c>ModelsAsync</c>, and left
+/// to the server when it holds none. Token counts and upload references stay the server's.
 /// </summary>
 internal static class LocalChecks
 {
@@ -20,146 +26,762 @@ internal static class LocalChecks
     internal const int MaxChoiceOptions = 255;
     internal const int MaxScoreLevels = 10;
     internal const int MaxGridValues = 4096;
+    internal const int MaxNesting = 128;
+    internal const int MaxWindow = 64;
+    internal const int MaxTtlSeconds = 3600;
+    internal const long MaxSeq = 9007199254740991;
+    internal const int MaxListLimit = 100;
+    internal const int MaxCustomIdChars = 512;
+    private const decimal TwoTo53 = 9007199254740992m;
+    private const int MaxNumberDecimals = 6;
 
-    /// <summary>Checks every question's fixed limits, in question order.</summary>
-    internal static void Questions(JsonObject questions)
+    internal const string Decide = "decide";
+    internal const string SystemOne = "systemone";
+
+    private static readonly string[] DecideTypes = { "truth", "noul", "choice", "score", "number" };
+    private static readonly string[] SystemOneTypes = { "noul", "choice", "score" };
+    private static readonly string[] MediaTypes = { ImageHeader.Jpeg, ImageHeader.Png, ImageHeader.WebP };
+
+    // ------------------------------------------------------------------ requests
+
+    /// <summary>
+    /// A decide body (<c>model</c>, <c>state</c>, <c>questions</c>) with
+    /// <paramref name="imageCount"/> images beside it, on <paramref name="profile"/>.
+    /// </summary>
+    internal static void Request(JsonObject body, int imageCount, string profile, JsonObject? held, List<JsonNode?>? entriesBefore = null)
     {
-        foreach (var (id, node) in questions)
+        // The images sit at body.images[i], three levels deep, whatever their form.
+        Nesting(Math.Max(Depth(body), imageCount > 0 ? 3 : 0));
+        var entries = entriesBefore ?? new List<JsonNode?>();
+        var deferred = new List<DecisionNodeError>();
+        if (body.TryGetPropertyValue("state", out var state) && state is not null && !IsStringObjectOrArray(state))
         {
-            if (node is not JsonObject q)
+            entries.AddRange(SdlEntries(new JsonArray("body", "state"), state));
+        }
+        if (body["questions"] is JsonObject questions)
+        {
+            foreach (var (id, q) in questions)
             {
-                continue;
+                Question(id, q, entries, deferred, profile, held);
             }
-            var criteria = q["criteria"];
-            switch (JsonValues.AsString(q["type"]))
-            {
-                case "choice" when criteria is JsonObject options:
-                    if (options.Count == 0)
-                    {
-                        throw BadRequest($"Choice question must have at least one choice: {id}");
-                    }
-                    if (options.Count > MaxChoiceOptions)
-                    {
-                        throw BadRequest($"Too many choices. Must have at most {MaxChoiceOptions} choices.");
-                    }
-                    break;
-                case "score" when criteria is JsonArray or JsonObject:
-                    var levels = criteria is JsonArray list ? list.Count : ((JsonObject)criteria).Count;
-                    if (levels == 0)
-                    {
-                        throw Validation($"question {id}: a score needs at least one level");
-                    }
-                    if (levels > MaxScoreLevels)
-                    {
-                        throw BadRequest($"Too many score levels. Must have at most {MaxScoreLevels} levels.");
-                    }
-                    break;
-                case "truth" or "noul":
-                    var sides = criteria as JsonObject;
-                    if (q["instructions"] is null && sides?["true"] is null && sides?["false"] is null)
-                    {
-                        throw BadRequest($"Truth question must have criteria or instructions: {id}");
-                    }
-                    break;
-                case "number":
-                    Number(id, q);
-                    break;
-            }
+        }
+        if (entries.Count > 0)
+        {
+            throw Unprocessable(entries);
+        }
+        if (deferred.Count > 0)
+        {
+            throw deferred[0];
         }
     }
 
-    private static void Number(string id, JsonObject q)
+    private static void Question(string id, JsonNode? node, List<JsonNode?> entries, List<DecisionNodeError> deferred, string profile, JsonObject? held)
     {
-        var low = Literal(q["min"], 0m, out var lowOk);
-        var high = Literal(q["max"], 255m, out var highOk);
-        var step = Literal(q["step"], 1m, out var stepOk);
-        if (!lowOk || !highOk || !stepOk)
+        var at = new JsonArray("body", "questions", id);
+        if (node is not JsonObject q)
         {
-            throw Validation($"question {id}: min, max and step must be numbers");
+            entries.Add(Entry("model_type", at, "Input should be a valid dictionary or object", node));
+            return;
         }
-        // A number beyond decimal's range is left to the server, which names the bound.
-        if (low is { } lo && high is { } hi && step is { } st)
+        if (q["type"] is null)
         {
-            if (st <= 0)
-            {
-                throw Validation($"question {id}: step must be above 0, got {Text(st)}");
-            }
-            if (lo > hi)
-            {
-                throw Validation($"question {id}: min {Text(lo)} is above max {Text(hi)}");
-            }
-            decimal values;
-            try
-            {
-                values = decimal.Floor((hi - lo) / st) + 1;
-            }
-            catch (OverflowException)
-            {
-                values = decimal.MaxValue;
-            }
-            if (values > MaxGridValues)
-            {
-                var count = values == decimal.MaxValue ? "more than 4096" : Text(values);
-                throw Validation($"question {id}: the grid holds {count} values, the limit is {MaxGridValues}");
-            }
+            entries.Add(Entry("missing", Loc(at, "type"), "Field required", q));
+            return;
         }
+        var type = JsonValues.AsString(q["type"]);
+        if (type is null || Array.IndexOf(profile == SystemOne ? SystemOneTypes : DecideTypes, type) < 0)
+        {
+            deferred.Add(BadRequest("Invalid request.", "api_usage_error", $"question '{id}': unknown type {q["type"]!.ToJsonString()}"));
+            return;
+        }
+        var loc = Loc(at, type);
         var instructions = q["instructions"];
-        if (instructions is null || JsonValues.AsString(instructions) == string.Empty)
+        if (instructions is not null && !IsStringObjectOrArray(instructions))
         {
-            throw BadRequest($"Number question must have instructions: {id}");
+            entries.AddRange(SdlEntries(Loc(loc, "instructions"), instructions));
+        }
+        var criteria = q["criteria"];
+        switch (type)
+        {
+            case "number":
+                if (JsonValues.AsLong(held?["number_max_grid_values"]) == 0)
+                {
+                    deferred.Add(BadRequest($"Model {JsonValues.AsString(held!["name"])} does not answer number questions.", "api_usage_error", null));
+                    return;
+                }
+                Number(id, q, loc, entries, deferred, (int?)JsonValues.AsLong(held?["number_max_grid_values"]) ?? MaxGridValues);
+                break;
+            case "choice":
+                var mostOptions = (int?)JsonValues.AsLong(held?["max_choice_options"]) ?? MaxChoiceOptions;
+                if (criteria is null)
+                {
+                    entries.Add(Entry("missing", Loc(loc, "criteria"), "Field required", q));
+                }
+                else if (criteria is not JsonObject options)
+                {
+                    entries.Add(Entry("dict_type", Loc(loc, "criteria"), "Input should be a valid dictionary", criteria));
+                }
+                else
+                {
+                    foreach (var (name, description) in options)
+                    {
+                        if (description is not null && !IsStringObjectOrArray(description))
+                        {
+                            entries.AddRange(SdlEntries(Loc(loc, "criteria", name), description));
+                        }
+                    }
+                    if (options.Count == 0)
+                    {
+                        deferred.Add(BadRequest($"Choice question must have at least one choice: {id}", null, null));
+                    }
+                    else if (options.Count > mostOptions)
+                    {
+                        deferred.Add(BadRequest($"Too many choices. Must have at most {mostOptions} choices.", null, null));
+                    }
+                }
+                break;
+            case "score":
+                var mostLevels = (int?)JsonValues.AsLong(held?["max_score_levels"]) ?? MaxScoreLevels;
+                if (criteria is null)
+                {
+                    entries.Add(Entry("missing", Loc(loc, "criteria"), "Field required", q));
+                    return;
+                }
+                List<JsonNode?>? levels = null;
+                if (criteria is JsonArray list)
+                {
+                    levels = list.ToList();
+                }
+                else if (criteria is JsonObject keyed && profile != SystemOne && IsIndexKeyed(keyed))
+                {
+                    // An object keyed "0" to "K-1" is a list on /v1/decide.
+                    levels = Enumerable.Range(0, keyed.Count).Select(i => keyed[i.ToString(CultureInfo.InvariantCulture)]).ToList();
+                }
+                if (levels is null)
+                {
+                    entries.Add(Entry("list_type", Loc(loc, "criteria"), "Input should be a valid list", criteria));
+                    return;
+                }
+                if (levels.Count == 0)
+                {
+                    entries.Add(Entry("too_short", Loc(loc, "criteria"), "List should have at least 1 item after validation, not 0", criteria));
+                    return;
+                }
+                for (var i = 0; i < levels.Count; i++)
+                {
+                    if (!IsStringObjectOrArray(levels[i]))
+                    {
+                        entries.AddRange(SdlEntries(Loc(loc, "criteria", i), levels[i]));
+                    }
+                }
+                if (levels.Count > mostLevels)
+                {
+                    deferred.Add(BadRequest($"Too many score levels. Must have at most {mostLevels} levels.", null, null));
+                }
+                break;
+            default: // truth, and the same type under its other wire name
+                if (criteria is not null && criteria is not JsonObject)
+                {
+                    entries.Add(Entry("dict_type", Loc(loc, "criteria"), "Input should be a valid dictionary", criteria));
+                    return;
+                }
+                var sides = criteria as JsonObject;
+                foreach (var side in new[] { "true", "false" })
+                {
+                    if (sides?[side] is { } value && !IsStringObjectOrArray(value))
+                    {
+                        entries.AddRange(SdlEntries(Loc(loc, "criteria", side), value));
+                    }
+                }
+                if (instructions is null && sides?["true"] is null && sides?["false"] is null)
+                {
+                    var name = type == "truth" ? "Truth" : "Noul";
+                    deferred.Add(BadRequest($"{name} question must have criteria or instructions: {id}", null, null));
+                }
+                break;
+        }
+    }
+
+    private static bool IsIndexKeyed(JsonObject o)
+    {
+        var i = 0;
+        foreach (var key in o.Select(kv => kv.Key).OrderBy(k => k.Length).ThenBy(k => k, StringComparer.Ordinal))
+        {
+            if (key != i.ToString(CultureInfo.InvariantCulture))
+            {
+                return false;
+            }
+            i++;
+        }
+        return true;
+    }
+
+    /// <summary>The number grid's <c>422</c> entries in the server's order, then its <c>400</c>.</summary>
+    private static void Number(string id, JsonObject q, JsonArray loc, List<JsonNode?> entries, List<DecisionNodeError> deferred, int maxValues)
+    {
+        var defaults = new Dictionary<string, decimal> { ["min"] = 0, ["max"] = 255, ["step"] = 1 };
+        var values = new Dictionary<string, decimal>();
+        var ok = true;
+        foreach (var name in new[] { "min", "max", "step" })
+        {
+            var sent = q[name];
+            var at = Loc(loc, name);
+            if (sent is null)
+            {
+                values[name] = defaults[name];
+                continue;
+            }
+            if (sent is not JsonValue v || v.GetValueKind() != JsonValueKind.Number)
+            {
+                entries.Add(Entry("float_type", at, "Input should be a valid number", sent));
+                ok = false;
+                continue;
+            }
+            var exact = ExactDecimal(v, out var sign);
+            if (name != "step" && (exact is null ? sign < 0 : exact < -TwoTo53))
+            {
+                entries.Add(Entry("greater_than_equal", at, "Input should be greater than or equal to -9007199254740992", sent, new JsonObject { ["ge"] = -9007199254740992L }));
+                ok = false;
+                continue;
+            }
+            if (name != "step" && (exact is null ? sign > 0 : exact > TwoTo53))
+            {
+                entries.Add(Entry("less_than_equal", at, "Input should be less than or equal to 9007199254740992", sent, new JsonObject { ["le"] = 9007199254740992L }));
+                ok = false;
+                continue;
+            }
+            if (name == "step" && (exact is null ? sign <= 0 : exact <= 0))
+            {
+                entries.Add(Entry("greater_than", at, "Input should be greater than 0", sent, new JsonObject { ["gt"] = 0 }));
+                ok = false;
+                continue;
+            }
+            if (exact is null)
+            {
+                // A step too large for decimal: a grid of one value, left to the server.
+                return;
+            }
+            if (name != "max" && Places(exact.Value) > MaxNumberDecimals)
+            {
+                entries.Add(Entry("decimal_max_places", at, "Decimal input should have no more than 6 decimal places", sent, new JsonObject { ["decimal_places"] = MaxNumberDecimals }));
+                ok = false;
+                continue;
+            }
+            values[name] = exact.Value;
+        }
+        if (!ok)
+        {
+            return;
+        }
+        decimal lo = values["min"], hi = values["max"], step = values["step"];
+        var d = Math.Max(Places(lo), Places(step));
+        if (d > 0)
+        {
+            // Every value must keep 15 significant digits: the decimal bound.
+            var bound = Pow10(15 - d) - (1m / Pow10(d));
+            var text = Text(bound);
+            foreach (var (name, value) in new[] { ("min", lo), ("max", hi) })
+            {
+                if (value > bound)
+                {
+                    entries.Add(Entry("less_than_equal", Loc(loc, name), "Input should be less than or equal to " + text, q[name], new JsonObject { ["le"] = JsonNumber(bound) }));
+                    return;
+                }
+                if (value < -bound)
+                {
+                    entries.Add(Entry("greater_than_equal", Loc(loc, name), "Input should be greater than or equal to -" + text, q[name], new JsonObject { ["ge"] = JsonNumber(-bound) }));
+                    return;
+                }
+            }
+        }
+        if (lo > hi)
+        {
+            var maxSent = q["max"]?.DeepClone() ?? JsonValue.Create(255);
+            var minSent = q["min"]?.DeepClone() ?? JsonValue.Create(0);
+            entries.Add(Entry("less_than_equal", Loc(loc, "min"), "Input should be less than or equal to " + maxSent.ToJsonString(), minSent, new JsonObject { ["le"] = maxSent.DeepClone() }));
+            return;
+        }
+        var scale = Pow10(d);
+        var count = ((long)decimal.Floor(hi * scale) - (long)(lo * scale)) / (long)(step * scale) + 1;
+        if (count > maxValues)
+        {
+            entries.Add(Entry("too_long", loc, $"Grid should have at most {maxValues} values, not {count}", q, new JsonObject
+            {
+                ["field_type"] = "Grid",
+                ["max_length"] = maxValues,
+                ["actual_length"] = count,
+            }));
+            return;
+        }
+        if (q["instructions"] is null || JsonValues.AsString(q["instructions"]) == string.Empty)
+        {
+            deferred.Add(BadRequest($"Number question must have instructions: {id}", null, null));
         }
     }
 
     /// <summary>
-    /// The exact decimal of a JSON number from its text. <paramref name="ok"/> is false for a
-    /// value that is not a number; the result is <c>null</c> for a number outside decimal's range.
+    /// The exact decimal of a JSON number, read from its shortest form. <c>null</c> when it is
+    /// beyond decimal's range; <paramref name="sign"/> then says which side.
     /// </summary>
-    private static decimal? Literal(JsonNode? node, decimal fallback, out bool ok)
+    private static decimal? ExactDecimal(JsonValue v, out int sign)
     {
-        ok = true;
-        if (node is null)
+        var text = v.ToJsonString();
+        sign = text.StartsWith('-') ? -1 : 1;
+        if (text.IndexOfAny(new[] { '.', 'e', 'E' }) >= 0
+            && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var asDouble))
         {
-            return fallback;
+            if (asDouble == 0)
+            {
+                sign = 0;
+            }
+            text = asDouble.ToString("R", CultureInfo.InvariantCulture);
         }
-        if (node is not JsonValue v || v.GetValueKind() != JsonValueKind.Number)
+        if (decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
         {
-            ok = false;
-            return null;
+            return d;
         }
-        return decimal.TryParse(v.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : null;
+        return null;
     }
 
-    private static string Text(decimal d) => d.ToString("0.############################", CultureInfo.InvariantCulture);
-
-    /// <summary>Checks the request's images: the count, the ids, and each image's own rules.</summary>
-    internal static void Images(IReadOnlyList<Image> images)
+    private static int Places(decimal value)
     {
-        if (images.Count > MaxImages)
+        var normal = value / 1.000000000000000000000000000000000m;
+        return (decimal.GetBits(normal)[3] >> 16) & 0xFF;
+    }
+
+    private static decimal Pow10(int n)
+    {
+        var r = 1m;
+        for (var i = 0; i < n; i++)
         {
-            throw BadRequest($"Too many images. Must have at most {MaxImages} images.", "api_usage_error");
+            r *= 10;
         }
+        return r;
+    }
+
+    private static string Text(decimal d) => d == 0 ? "0" : d.ToString("0.############################", CultureInfo.InvariantCulture);
+
+    private static JsonNode JsonNumber(decimal d)
+    {
+        var text = Text(d);
+        return text.Contains('.')
+            ? JsonValue.Create(double.Parse(text, CultureInfo.InvariantCulture))
+            : JsonValue.Create(long.Parse(text, CultureInfo.InvariantCulture));
+    }
+
+    // ------------------------------------------------------------------ nesting
+
+    /// <summary>How many objects and arrays sit inside each other, the outermost included.</summary>
+    internal static int Depth(JsonNode? node)
+    {
+        var deepest = 0;
+        var stack = new Stack<(JsonNode Node, int Depth)>();
+        if (node is JsonObject or JsonArray)
+        {
+            stack.Push((node, 1));
+        }
+        while (stack.Count > 0)
+        {
+            var (current, depth) = stack.Pop();
+            deepest = Math.Max(deepest, depth);
+            IEnumerable<JsonNode?> children = current is JsonObject o ? o.Select(kv => kv.Value) : (JsonArray)current;
+            foreach (var child in children)
+            {
+                if (child is JsonObject or JsonArray)
+                {
+                    stack.Push((child, depth + 1));
+                }
+            }
+        }
+        return deepest;
+    }
+
+    private static void Nesting(int depth)
+    {
+        if (depth > MaxNesting)
+        {
+            throw BadRequest("Invalid request.", "api_usage_error", $"the request nests {depth} objects and arrays inside each other; the limit is {MaxNesting}");
+        }
+    }
+
+    // ------------------------------------------------------------------ images
+
+    /// <summary>The request's images: the count, the ids, URLs, upload references and local bytes.</summary>
+    internal static void Images(IReadOnlyList<Image> images, JsonObject? held)
+    {
+        var most = (int?)JsonValues.AsLong(held?["max_images"]) ?? MaxImages;
+        if (images.Count > most)
+        {
+            throw BadRequest($"Too many images. Must have at most {most} images.", "api_usage_error", null);
+        }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < images.Count; i++)
         {
             var image = images[i];
-            for (var j = 0; j < i; j++)
+            if (string.IsNullOrEmpty(image.Id))
             {
-                if (images[j].Id == image.Id)
+                throw BadRequest($"Image {i} needs an id.", "api_usage_error", null);
+            }
+            if (!seen.Add(image.Id))
+            {
+                throw BadRequest($"Duplicate image id: {image.Id}", "api_usage_error", null);
+            }
+            One(image, held);
+        }
+    }
+
+    /// <summary>One image's own rules.</summary>
+    internal static void One(Image image, JsonObject? held)
+    {
+        if (image.Url is not null)
+        {
+            Url(image.Id, image.Url);
+            return;
+        }
+        if (image.UploadId is not null)
+        {
+            if (image.DeclaredMediaType is { } type && Array.IndexOf(MediaTypes, type) < 0)
+            {
+                throw BadRequest($"Image {image.Id}: media_type must be image/jpeg, image/png or image/webp.", "api_usage_error", null);
+            }
+            return;
+        }
+        if (image.Fault() is { } fault)
+        {
+            throw BadRequest(fault, "api_usage_error", null);
+        }
+        var biggest = JsonValues.AsLong(held?["max_image_bytes"]) ?? MaxImageBytes;
+        if (image.Data!.Value.Length > biggest)
+        {
+            throw BadRequest($"Image {image.Id} is larger than 10 MB.", "api_usage_error", null);
+        }
+    }
+
+    /// <summary>
+    /// The URL rules that need no network: <c>https</c> (else <c>api_usage_error</c>), then
+    /// <c>image_url_refused</c> for the length, user information, a port other than 443, no
+    /// host, or a literal address in a blocked range. A DNS name is the server's to resolve.
+    /// </summary>
+    internal static void Url(string id, string url)
+    {
+        if (!url.StartsWith("https://", StringComparison.Ordinal))
+        {
+            throw BadRequest($"Image {id}: only https URLs are accepted.", "api_usage_error", null);
+        }
+        string? reason = null;
+        var rest = url["https://".Length..];
+        var end = rest.IndexOfAny(new[] { '/', '?', '#' });
+        var authority = end < 0 ? rest : rest[..end];
+        if (url.Length > MaxUrlChars)
+        {
+            reason = $"the URL is {url.Length} characters, over the limit of {MaxUrlChars}";
+        }
+        else if (authority.Contains('@'))
+        {
+            reason = "the URL carries user information";
+        }
+        else
+        {
+            var (host, port) = SplitAuthority(authority);
+            if (port is not (null or 443))
+            {
+                reason = "the URL uses a port other than 443";
+            }
+            else if (host.Length == 0)
+            {
+                reason = "the URL has no host";
+            }
+            else if (IsBlockedAddress(host))
+            {
+                reason = "the URL resolves to a private address";
+            }
+        }
+        if (reason is not null)
+        {
+            throw BadRequest($"Image '{id}': {reason}.", "image_url_refused", null);
+        }
+    }
+
+    /// <summary>The host and port of an authority; a port that is not a number reads as -1.</summary>
+    private static (string Host, int? Port) SplitAuthority(string authority)
+    {
+        string host;
+        string? port = null;
+        if (authority.StartsWith('['))
+        {
+            var close = authority.IndexOf(']');
+            if (close < 0)
+            {
+                return (string.Empty, null);
+            }
+            host = authority[1..close];
+            var after = authority[(close + 1)..];
+            if (after.StartsWith(':'))
+            {
+                port = after[1..];
+            }
+        }
+        else
+        {
+            var colon = authority.LastIndexOf(':');
+            host = colon < 0 ? authority : authority[..colon];
+            port = colon < 0 ? null : authority[(colon + 1)..];
+        }
+        if (port is null || port.Length == 0)
+        {
+            return (host, null);
+        }
+        return (host, int.TryParse(port, NumberStyles.None, CultureInfo.InvariantCulture, out var p) && p <= 65535 ? p : -1);
+    }
+
+    private static readonly (byte[] Network, int Bits)[] BlockedV4 = Ranges(
+        "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+        "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15",
+        "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32");
+
+    private static readonly (byte[] Network, int Bits)[] BlockedV6 = Ranges(
+        "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "2001:db8::/32", "fd00:ec2::254/128");
+
+    private static readonly (byte[] Network, int Bits) Nat64 = Ranges("64:ff9b::/96")[0];
+
+    private static (byte[], int)[] Ranges(params string[] cidrs) => cidrs.Select(c =>
+    {
+        var slash = c.IndexOf('/');
+        return (IPAddress.Parse(c[..slash]).GetAddressBytes(), int.Parse(c[(slash + 1)..], CultureInfo.InvariantCulture));
+    }).ToArray();
+
+    /// <summary>Whether a host is a literal IP address in a blocked range (IPv4 inside IPv6 judged by the IPv4 address).</summary>
+    internal static bool IsBlockedAddress(string host)
+    {
+        // Only literal addresses: a dotted quad or an IPv6 address. A name is the server's.
+        var literal = host.Contains(':') || System.Text.RegularExpressions.Regex.IsMatch(host, @"^\d{1,3}(\.\d{1,3}){3}$");
+        if (!literal || !IPAddress.TryParse(host, out var address))
+        {
+            return false;
+        }
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var bytes = address.GetAddressBytes();
+            if (address.IsIPv4MappedToIPv6)
+            {
+                address = address.MapToIPv4();
+            }
+            else if (InRange(bytes, Nat64))
+            {
+                address = new IPAddress(bytes[12..]);
+            }
+        }
+        var raw = address.GetAddressBytes();
+        var ranges = address.AddressFamily == AddressFamily.InterNetwork ? BlockedV4 : BlockedV6;
+        return ranges.Any(r => InRange(raw, r));
+    }
+
+    private static bool InRange(byte[] address, (byte[] Network, int Bits) range)
+    {
+        if (address.Length != range.Network.Length)
+        {
+            return false;
+        }
+        for (var bit = 0; bit < range.Bits; bit++)
+        {
+            var mask = 0x80 >> (bit % 8);
+            if ((address[bit / 8] & mask) != (range.Network[bit / 8] & mask))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------------ sessions
+
+    /// <summary>
+    /// An open body: nesting, <c>instructions</c> and <c>state</c> of the three types,
+    /// <c>window</c> 1 to 64 and <c>ttl_seconds</c> 1 to 3,600 (held values replace the
+    /// bounds), every question rule, and a model the client knows serves no sessions.
+    /// </summary>
+    internal static void SessionOpen(JsonObject body, JsonObject? held)
+    {
+        Nesting(Depth(body));
+        var sessions = held?["sessions"] as JsonObject;
+        var entries = new List<JsonNode?>();
+        foreach (var name in new[] { "instructions", "state" })
+        {
+            if (body[name] is { } value && !IsStringObjectOrArray(value))
+            {
+                entries.AddRange(SdlEntries(new JsonArray("body", name), value));
+            }
+        }
+        var bounds = new[]
+        {
+            ("window", JsonValues.AsLong(sessions?["max_window"]) ?? MaxWindow),
+            ("ttl_seconds", JsonValues.AsLong(sessions?["max_ttl_seconds"]) ?? MaxTtlSeconds),
+        };
+        foreach (var (name, high) in bounds)
+        {
+            if (body[name] is not { } sent)
+            {
+                continue;
+            }
+            var value = JsonValues.AsLong(sent);
+            if (value is null)
+            {
+                entries.Add(Entry("int_type", new JsonArray("body", name), "Input should be a valid integer", sent));
+            }
+            else if (value < 1)
+            {
+                entries.Add(Entry("greater_than_equal", new JsonArray("body", name), "Input should be greater than or equal to 1", sent, new JsonObject { ["ge"] = 1 }));
+            }
+            else if (value > high)
+            {
+                entries.Add(Entry("less_than_equal", new JsonArray("body", name), $"Input should be less than or equal to {high}", sent, new JsonObject { ["le"] = high }));
+            }
+        }
+        Request(new JsonObject { ["questions"] = body["questions"]?.DeepClone() }, 0, Decide, held, entries);
+        if (sessions?["enabled"] is JsonValue enabled && enabled.GetValueKind() == JsonValueKind.False)
+        {
+            throw BadRequest($"Model {JsonValues.AsString(held!["name"])} does not serve sessions.", "api_usage_error", null);
+        }
+    }
+
+    /// <summary>A frame's fixed rules, as the server's frame error would name them (<c>api_usage_error</c>).</summary>
+    internal static void Frame(long? seq, JsonNode? frame, bool hasImage, IReadOnlyList<string>? questions, IReadOnlyList<string> sessionQuestions)
+    {
+        if (seq is < 0 or > MaxSeq)
+        {
+            throw BadRequest($"seq: must be an integer from 0 to {MaxSeq}.", "api_usage_error", null);
+        }
+        if (frame is null && !hasImage)
+        {
+            throw BadRequest("frame: a frame needs a frame value or an image.", "api_usage_error", null);
+        }
+        if (frame is not null && (!IsStringObjectOrArray(frame) || JsonValues.AsString(frame) == string.Empty))
+        {
+            throw BadRequest("frame: must be a string, an object or an array, not empty.", "api_usage_error", null);
+        }
+        if (questions is not null)
+        {
+            if (questions.Count == 0)
+            {
+                throw BadRequest("questions: must be a non-empty list of the session's question ids.", "api_usage_error", null);
+            }
+            if (sessionQuestions.Count > 0)
+            {
+                foreach (var id in questions)
                 {
-                    throw BadRequest($"Image id '{image.Id}' is used twice; image ids must be unique within a request.", "api_usage_error");
+                    if (!sessionQuestions.Contains(id))
+                    {
+                        throw BadRequest($"questions: unknown question id '{id}'", "api_usage_error", null);
+                    }
                 }
             }
-            if (image.Fault() is { } fault)
+        }
+        if (frame is not null && Depth(frame) + 1 > MaxNesting)
+        {
+            throw BadRequest($"The frame nests more than {MaxNesting} objects and arrays inside each other.", "api_usage_error", null);
+        }
+    }
+
+    // ------------------------------------------------------------------ batches
+
+    /// <summary>
+    /// The <c>custom_id</c> rules of one create or add call (lines numbered from 1 within
+    /// the call), an empty add, and the held <c>requests_per_batch</c> and <c>max_custom_id_chars</c>.
+    /// </summary>
+    internal static void BatchLines(IReadOnlyList<string?> customIds, bool allowEmpty, JsonObject? held)
+    {
+        if (customIds.Count == 0 && !allowEmpty)
+        {
+            throw BadRequest("The call holds no requests.", "api_usage_error", null);
+        }
+        var batch = held?["batch"] as JsonObject;
+        if (JsonValues.AsLong(batch?["requests_per_batch"]) is { } most && customIds.Count > most)
+        {
+            throw BadRequest($"The batch would hold {customIds.Count} requests. The limit is {most}.", "api_usage_error", null);
+        }
+        var longest = JsonValues.AsLong(batch?["max_custom_id_chars"]);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < customIds.Count; i++)
+        {
+            var n = i + 1;
+            var id = customIds[i];
+            if (id is null)
             {
-                throw BadRequest(fault, "api_usage_error");
+                throw BadRequest($"Line {n} has no custom_id.", "api_usage_error", null);
+            }
+            if (id.Length < 1 || id.Length > (longest ?? MaxCustomIdChars))
+            {
+                throw BadRequest($"Line {n}: custom_id must be a string of 1 to {longest ?? MaxCustomIdChars} characters.", "api_usage_error", null);
+            }
+            if (!seen.Add(id))
+            {
+                var shown = JsonValue.Create(id).ToJsonString(JsonValues.Options);
+                throw BadRequest($"Line {n}: custom_id {(shown.Length <= 64 ? shown : shown[..64] + "...")} is already in the batch.", "api_usage_error", null);
             }
         }
     }
 
-    /// <summary>The <see cref="BadRequestError"/> the API answers a fault with, raised before any request.</summary>
-    internal static BadRequestError BadRequest(string message, string? errorType = null) =>
-        new(new ErrorDetails { Message = message, ErrorType = errorType });
+    /// <summary><c>offset</c> 0 or more, <c>limit</c> 1 to 100.</summary>
+    internal static void ListPage(int? offset, int? limit)
+    {
+        if (offset is < 0)
+        {
+            throw BadRequest($"Query parameter offset must be an integer of 0 or more, got {offset}.", "api_usage_error", null);
+        }
+        if (limit is < 1 or > MaxListLimit)
+        {
+            throw BadRequest($"Query parameter limit must be an integer from 1 to {MaxListLimit}, got {limit}.", "api_usage_error", null);
+        }
+    }
 
-    /// <summary>The <see cref="ValidationError"/> the API answers a fault with (a <c>422</c>), raised before any request.</summary>
-    internal static ValidationError Validation(string message) =>
-        new(new ErrorDetails { Message = message }, null);
+    // ------------------------------------------------------------------ errors and entries
+
+    private static bool IsStringObjectOrArray(JsonNode? node) =>
+        node is JsonObject or JsonArray || (node is JsonValue v && v.GetValueKind() == JsonValueKind.String);
+
+    private static IEnumerable<JsonNode?> SdlEntries(JsonArray loc, JsonNode? value) => new[]
+    {
+        Entry("string_type", Loc(loc, "str"), "Input should be a valid string", value),
+        Entry("dict_type", Loc(loc, "dict[any,any]"), "Input should be a valid dictionary", value),
+        Entry("list_type", Loc(loc, "list[any]"), "Input should be a valid list", value),
+    };
+
+    private static JsonArray Loc(JsonArray loc, params object[] more)
+    {
+        var copy = (JsonArray)loc.DeepClone();
+        foreach (var part in more)
+        {
+            copy.Add(part is int i ? JsonValue.Create(i) : JsonValue.Create((string)part));
+        }
+        return copy;
+    }
+
+    private static JsonObject Entry(string type, JsonArray loc, string msg, JsonNode? input, JsonObject? ctx = null)
+    {
+        var e = new JsonObject
+        {
+            ["type"] = type,
+            ["loc"] = loc.DeepClone(),
+            ["msg"] = msg,
+            ["input"] = input?.DeepClone(),
+        };
+        if (ctx is not null)
+        {
+            e["ctx"] = ctx;
+        }
+        return e;
+    }
+
+    /// <summary>The <see cref="BadRequestError"/> the API answers a fault with, raised before any request.</summary>
+    internal static BadRequestError BadRequest(string message, string? errorType, string? reason = null) =>
+        new(new ErrorDetails { Message = message, ErrorType = errorType, Reason = reason });
+
+    /// <summary>The API's <c>422</c>, raised before any request: the entries the server would list.</summary>
+    private static ValidationError Unprocessable(List<JsonNode?> entries)
+    {
+        var first = entries[0] as JsonObject;
+        var reason = first is null ? null : $"{string.Join(".", ((JsonArray)first["loc"]!).Skip(1).Select(p => p!.ToString()))}: {first["msg"]}"
+            + (entries.Count > 1 ? $" and {entries.Count - 1} more" : string.Empty);
+        return new ValidationError(new ErrorDetails { Message = string.Empty, Reason = reason }, new JsonArray(entries.ToArray()));
+    }
 }
