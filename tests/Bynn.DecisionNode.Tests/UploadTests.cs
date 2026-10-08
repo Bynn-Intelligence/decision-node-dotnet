@@ -91,6 +91,29 @@ public class UploadTests
     }
 
     [Fact]
+    public async Task SixteenImagesAreUploadedInOnePresignAndUploadSplitsAtSixteen()
+    {
+        var (dn, api, storage) = Make();
+        using var _ = dn;
+        Image Distinct(int i)
+        {
+            var data = Padded(40_000);
+            data[^1] = (byte)i;
+            return Image.FromBytes("i" + i, data);
+        }
+        await dn.DecideAsync("s", OneTruth(), Enumerable.Range(0, 16).Select(Distinct));
+        var requests = api.Requests.ToList();
+        Assert.Equal(new[] { "/v1/uploads", "/v1/decide" }, requests.Select(r => r.Uri.AbsolutePath));
+        Assert.Equal(16, ((JsonArray)requests[0].Json!["files"]!).Count);
+        Assert.Equal(16, storage.Requests.Count);
+
+        var ids = await dn.UploadAsync(Enumerable.Range(100, 17).Select(Distinct));
+        Assert.Equal(17, ids.Count);
+        var presigns = api.Requests.Skip(2).Select(r => ((JsonArray)r.Json!["files"]!).Count).ToList();
+        Assert.Equal(new[] { 16, 1 }, presigns);
+    }
+
+    [Fact]
     public async Task ThePutCarriesExactlyThePresignedHeadersAndNeverTheKey()
     {
         var (dn, _, storage) = Make();

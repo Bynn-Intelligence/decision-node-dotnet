@@ -113,8 +113,8 @@ public class SpecOneOneTests
     public static IEnumerable<object[]> ImageFaults()
     {
         var png = Fixtures.Read("rgb-7x3.png");
-        yield return new object[] { Enumerable.Range(0, 5).Select(i => Image.FromBytes("i" + i, png)).ToArray() };
-        yield return new object[] { new[] { Image.FromBytes("a", png), Image.FromUrl("b", "https://x.example/1"), Image.FromUrl("c", "https://x.example/2"), Image.FromUrl("d", "https://x.example/3"), Image.FromUrl("e", "https://x.example/4") } };
+        yield return new object[] { Enumerable.Range(0, 17).Select(i => Image.FromBytes("i" + i, png)).ToArray() };
+        yield return new object[] { new[] { Image.FromBytes("a", png) }.Concat(Enumerable.Range(1, 16).Select(i => Image.FromUrl("u" + i, "https://x.example/" + i))).ToArray() };
         yield return new object[] { new[] { Image.FromBytes("a", png), Image.FromBytes("a", png) } };
         yield return new object[] { new[] { Image.FromUrl("u", "http://x.example/r.jpg") } };
         yield return new object[] { new[] { Image.FromBytes("g", Fixtures.Read("pixel.gif"), "image/gif") } };

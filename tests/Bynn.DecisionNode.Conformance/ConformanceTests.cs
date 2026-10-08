@@ -96,46 +96,48 @@ public sealed class ConformanceTests
                 j++;
             }
             // Requests sent in parallel may arrive in any order: one assignment must hold.
-            var reasons = new List<string>();
-            var matched = false;
-            foreach (var perm in Permutations(Enumerable.Range(i, j - i).ToList()))
+            // Each expected request is paired with a received one it matches, every received
+            // request used once (a bipartite matching, so sixteen parallel PUTs stay cheap).
+            var size = j - i;
+            var fits = new List<int>[size];
+            string? reason = null;
+            for (var k = 0; k < size; k++)
             {
-                try
+                fits[k] = new List<int>();
+                for (var g = i; g < j; g++)
                 {
-                    for (var k = 0; k < perm.Count; k++)
+                    try
                     {
-                        CheckRequest((JsonObject)expected[i + k]!, (JsonObject)log[perm[k]]!, $"requests[{i + k}]");
+                        CheckRequest((JsonObject)expected[i + k]!, (JsonObject)log[g]!, $"requests[{i + k}]");
+                        fits[k].Add(g);
                     }
-                    matched = true;
-                    break;
-                }
-                catch (Xunit.Sdk.XunitException miss)
-                {
-                    reasons.Add(miss.Message);
+                    catch (Xunit.Sdk.XunitException miss)
+                    {
+                        reason ??= miss.Message;
+                    }
                 }
             }
-            if (!matched)
+            var owner = new Dictionary<int, int>();
+            bool Assign(int k, HashSet<int> seen)
             {
-                throw Fail("no order of the parallel requests matches: " + reasons[0]);
+                foreach (var g in fits[k])
+                {
+                    if (seen.Add(g) && (!owner.TryGetValue(g, out var other) || Assign(other, seen)))
+                    {
+                        owner[g] = k;
+                        return true;
+                    }
+                }
+                return false;
+            }
+            for (var k = 0; k < size; k++)
+            {
+                if (!Assign(k, new HashSet<int>()))
+                {
+                    throw Fail("no order of the parallel requests matches: " + (reason ?? $"requests[{i + k}] matches no request"));
+                }
             }
             i = j;
-        }
-    }
-
-    private static IEnumerable<List<int>> Permutations(List<int> items)
-    {
-        if (items.Count <= 1)
-        {
-            yield return items;
-            yield break;
-        }
-        for (var i = 0; i < items.Count; i++)
-        {
-            var rest = items.Where((_, k) => k != i).ToList();
-            foreach (var tail in Permutations(rest))
-            {
-                yield return new List<int> { items[i] }.Concat(tail).ToList();
-            }
         }
     }
 

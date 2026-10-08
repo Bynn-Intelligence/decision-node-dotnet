@@ -149,16 +149,16 @@ public static class Driver
             "decide_many" => Wrap(client.DecideManyAsync(
                 ((JsonArray)args["requests"]!).Select(r => Request((JsonObject)r!, ctx)).ToList(),
                 args["concurrency"] is { } c ? (int)c : 8)),
-            "check" => Wrap(client.CheckAsync(State(args, ctx), Arg("instructions"), Arg("true"), Arg("false"), Images(args, ctx), Text("model"))),
+            "check" => Wrap(client.CheckAsync(State(args, ctx), Arg("instructions"), Arg("true"), Arg("false"), Images(args, ctx), Videos(args, ctx), Text("model"))),
             "classify" => args["options"] is JsonArray names
-                ? Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), names.Select(n => (string)n!).ToList(), Images(args, ctx), Text("model")))
-                : Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), Options((JsonObject)args["options"]!), Images(args, ctx), Text("model"))),
-            "score" => Wrap(client.ScoreAsync(State(args, ctx), Arg("instructions"), ((JsonArray)args["levels"]!).Select(l => (object?)l?.DeepClone()).ToList(), Images(args, ctx), Text("model"))),
-            "number" => Wrap(client.NumberAsync(State(args, ctx), Arg("instructions"), Number("min"), Number("max"), Number("step"), Images(args, ctx), Text("model"))),
-            "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Text("model"))),
+                ? Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), names.Select(n => (string)n!).ToList(), Images(args, ctx), Videos(args, ctx), Text("model")))
+                : Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), Options((JsonObject)args["options"]!), Images(args, ctx), Videos(args, ctx), Text("model"))),
+            "score" => Wrap(client.ScoreAsync(State(args, ctx), Arg("instructions"), ((JsonArray)args["levels"]!).Select(l => (object?)l?.DeepClone()).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"))),
+            "number" => Wrap(client.NumberAsync(State(args, ctx), Arg("instructions"), Number("min"), Number("max"), Number("step"), Images(args, ctx), Videos(args, ctx), Text("model"))),
+            "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Videos(args, ctx), Text("model"))),
             "models" => Wrap(client.ModelsAsync()),
             "decide_raw" => Wrap(client.DecideRawAsync(args["body"]!.DeepClone())),
-            "systemone" => Wrap(client.SystemoneAsync(State(args, ctx), Questions((JsonObject)args["questions"]!, ctx), Images(args, ctx), Text("model"))),
+            "systemone" => Wrap(client.SystemoneAsync(State(args, ctx), Questions((JsonObject)args["questions"]!, ctx), Images(args, ctx), Videos(args, ctx), Text("model"))),
             "upload" => Wrap(client.UploadAsync(Images(args, ctx)!)),
             "open_session" => Wrap(client.OpenSessionAsync(SessionBody(args, ctx))),
             "supervise" => SuperviseAsync(client, args, ctx),
@@ -323,6 +323,7 @@ public static class Driver
         State = State(args, ctx),
         Questions = Questions((JsonObject)args["questions"]!, ctx),
         Images = Images(args, ctx),
+        Videos = Videos(args, ctx),
         Model = (string?)args["model"],
     };
 
@@ -337,6 +338,7 @@ public static class Driver
                 State = State(o, ctx),
                 Questions = Questions((JsonObject)o["questions"]!, ctx),
                 Images = Images(o, ctx),
+                Videos = Videos(o, ctx),
                 Model = (string?)o["model"],
             };
         }).ToList();
@@ -398,7 +400,78 @@ public static class Driver
     }
 
     private static List<Image>? Images(JsonObject args, Dictionary<string, object?> ctx) =>
-        args["images"] is JsonArray list ? list.Select(i => ImageOf((JsonObject)i!, ctx)).ToList() : null;
+        Plain(args["images"], ctx) is JsonArray list ? list.Select(i => ImageOf((JsonObject)i!, ctx)).ToList() : null;
+
+    /// <summary>
+    /// <c>$video</c> builders and plain wire-form videos. A builder whose <c>fps</c>, <c>start</c>,
+    /// <c>end</c> or frame <c>t</c> is not a number cannot be written with the typed factories, so
+    /// it is passed in its wire form, which the library checks by the same rules.
+    /// </summary>
+    private static List<Video>? Videos(JsonObject args, Dictionary<string, object?> ctx) =>
+        Plain(args["videos"], ctx) is JsonArray list ? list.Select(v => VideoOf((JsonObject)v!)).ToList() : null;
+
+    private static Video VideoOf(JsonObject item)
+    {
+        if (item["$video"] is not JsonObject spec)
+        {
+            return Video.FromJson(item);
+        }
+        var frames = ((JsonArray)spec["frames"]!).Select(f => FrameOf((JsonObject)f!)).ToList();
+        if (!Numeric(spec["fps"], out var fps) || !Numeric(spec["start"], out var start) || !Numeric(spec["end"], out var end))
+        {
+            var wire = new JsonObject { ["id"] = spec["id"]?.DeepClone() };
+            foreach (var name in new[] { "fps", "start", "end" })
+            {
+                if (spec.ContainsKey(name))
+                {
+                    wire[name] = spec[name]?.DeepClone();
+                }
+            }
+            wire["frames"] = new JsonArray(frames.Select(f => (JsonNode?)f.ToJson()).ToArray());
+            return Video.FromJson(wire);
+        }
+        return Video.Of((string)spec["id"]!, frames, fps, start, end);
+    }
+
+    private static Bynn.DecisionNode.Frame FrameOf(JsonObject item)
+    {
+        if (item["$frame"] is not JsonObject spec)
+        {
+            return Bynn.DecisionNode.Frame.FromJson(item);
+        }
+        var mediaType = (string?)spec["media_type"];
+        if (!Numeric(spec["t"], out var t) || t is null)
+        {
+            var data = spec["data_text"] is { } text
+                ? (string)text!
+                : Convert.ToBase64String(spec["path"] is { } p ? File.ReadAllBytes(Path.Combine(Suite.Directory, (string)p!)) : Convert.FromBase64String((string)spec["data_base64"]!));
+            return Bynn.DecisionNode.Frame.FromJson(new JsonObject { ["t"] = spec["t"]?.DeepClone(), ["media_type"] = mediaType, ["data"] = data });
+        }
+        if (spec["data_text"] is { } base64)
+        {
+            return Bynn.DecisionNode.Frame.FromBase64(t.Value, (string)base64!, mediaType);
+        }
+        var bytes = spec["path"] is { } path
+            ? File.ReadAllBytes(Path.Combine(Suite.Directory, (string)path!))
+            : Convert.FromBase64String((string)spec["data_base64"]!);
+        return Bynn.DecisionNode.Frame.FromBytes(t.Value, bytes, mediaType);
+    }
+
+    /// <summary>An absent value, or a JSON number: what a typed factory can take.</summary>
+    private static bool Numeric(JsonNode? node, out double? value)
+    {
+        value = null;
+        if (node is null)
+        {
+            return true;
+        }
+        if (node is JsonValue v && v.GetValueKind() == System.Text.Json.JsonValueKind.Number)
+        {
+            value = (double)v;
+            return true;
+        }
+        return false;
+    }
 
     private static Image ImageOf(JsonObject wrapper, Dictionary<string, object?> ctx)
     {
@@ -516,12 +589,22 @@ public static class Driver
 
     private static JsonObject? Usage(Usage? u) => u is null ? null : new JsonObject { ["input_tokens"] = u.InputTokens, ["output_tokens"] = u.OutputTokens };
 
+    /// <summary>A decision's usage: the token counts and what was read of its videos.</summary>
+    private static JsonObject DecisionUsage(Usage u) => new()
+    {
+        ["input_tokens"] = u.InputTokens,
+        ["output_tokens"] = u.OutputTokens,
+        ["video_frames"] = u.VideoFrames,
+        ["video_seconds"] = u.VideoSeconds,
+    };
+
     public static JsonObject Decision(Decision d) => new()
     {
         ["model"] = d.Model,
         ["request_id"] = d.RequestId,
         ["latency_ms"] = d.LatencyMs,
-        ["usage"] = Usage(d.Usage),
+        ["usage"] = DecisionUsage(d.Usage),
+        ["warnings"] = new JsonArray(d.Warnings.Select(w => (JsonNode?)w).ToArray()),
         ["safety"] = Safety(d.Safety),
         ["answers"] = Answers(d.Answers),
         ["raw"] = d.Raw.DeepClone(),

@@ -9,7 +9,7 @@ namespace Bynn.DecisionNode.Internal;
 /// <summary>
 /// Every fixed rule the API documents, checked on this machine before anything is sent,
 /// in the server's order: the nesting limit, then every <c>422</c> entry of the request,
-/// then the first <c>400</c> in question order, then the images. A fault raises what the
+/// then the first <c>400</c> in question order, then the images, then the videos. A fault raises what the
 /// server would answer: the same class, the same <c>error_type</c>, the documented message,
 /// and for a <c>422</c> a <see cref="ValidationError"/> whose entries are the server's list.
 /// A local error has no status and no request id; its <c>Reason</c> says what the server's
@@ -19,7 +19,10 @@ namespace Bynn.DecisionNode.Internal;
 /// </summary>
 internal static class LocalChecks
 {
-    internal const int MaxImages = 4;
+    internal const int MaxImages = 16;
+    internal const int MaxUploadFiles = 16;
+    internal const int MaxVideos = 4;
+    internal const double MaxFps = 4;
     internal const int MaxImageBytes = 10 * 1024 * 1024;
     internal const long MaxImagePixels = 40_000_000;
     internal const int MaxUrlChars = 2048;
@@ -409,10 +412,10 @@ internal static class LocalChecks
     /// <summary>The request's images: the count, the ids, URLs, upload references and local bytes.</summary>
     internal static void Images(IReadOnlyList<Image> images, JsonObject? held)
     {
-        var most = (int?)JsonValues.AsLong(held?["max_images"]) ?? MaxImages;
+        var most = (int?)(JsonValues.AsLong((held?["images"] as JsonObject)?["max_images"]) ?? JsonValues.AsLong(held?["max_images"])) ?? MaxImages;
         if (images.Count > most)
         {
-            throw BadRequest($"Too many images. Must have at most {most} images.", "api_usage_error", null);
+            throw BadRequest($"Too many images: {images.Count}, the limit is {most}.", "api_usage_error", null);
         }
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < images.Count; i++)
@@ -592,6 +595,104 @@ internal static class LocalChecks
         }
         return true;
     }
+
+    // ------------------------------------------------------------------ videos
+
+    /// <summary>
+    /// The request's videos in their wire form, after the images: the count, then each video
+    /// in turn (its id, unique across images and videos; its frames, each frame's time and
+    /// media type; <c>fps</c>, <c>start</c> and <c>end</c>). The frame counts, the frames'
+    /// bytes and sizes and the token budget are the server's.
+    /// </summary>
+    internal static void Videos(IReadOnlyList<JsonObject> videos, IEnumerable<string> imageIds, JsonObject? held)
+    {
+        if (videos.Count == 0)
+        {
+            return;
+        }
+        var most = (int?)JsonValues.AsLong((held?["videos"] as JsonObject)?["max_videos"]) ?? MaxVideos;
+        if (videos.Count > most)
+        {
+            throw BadRequest($"Too many videos: {videos.Count}, the limit is {most}.", "api_usage_error", null);
+        }
+        var seen = new HashSet<string>(imageIds, StringComparer.Ordinal);
+        for (var i = 0; i < videos.Count; i++)
+        {
+            var video = videos[i];
+            if (JsonValues.AsString(video["id"]) is not { Length: > 0 } id)
+            {
+                throw BadRequest($"Video {i} needs an id.", "api_usage_error", null);
+            }
+            if (!seen.Add(id))
+            {
+                throw BadRequest($"Video id '{id}' is used twice (ids are unique across images and videos).", "api_usage_error", null);
+            }
+            var forms = new[] { "data", "url", "frames" }.Count(name => video[name] is not null);
+            if (forms > 1)
+            {
+                throw VideoFault(id, "needs exactly one of data, url and frames");
+            }
+            // A video file or a URL is never sent: this library sends videos as frames only.
+            if (video["frames"] is not JsonArray frames || frames.Count == 0)
+            {
+                throw VideoFault(id, "frames must be a non-empty list of frames");
+            }
+            double? before = null;
+            for (var n = 0; n < frames.Count; n++)
+            {
+                if (frames[n] is not JsonObject frame)
+                {
+                    throw VideoFault(id, $"frame {n} must be an object with t, media_type and data");
+                }
+                if (!IsFinite(frame["t"], out var t) || t < 0)
+                {
+                    throw VideoFault(id, $"frame {n}: t must be a number of seconds, at least 0");
+                }
+                if (before is { } previous && t <= previous)
+                {
+                    throw VideoFault(id, $"frame {n}: t must be larger than the frame before it ({Shortest(previous)})");
+                }
+                before = t;
+                if (JsonValues.AsString(frame["data"]) is null)
+                {
+                    throw VideoFault(id, $"frame {n}: data must be base64 text");
+                }
+                if (JsonValues.AsString(frame["media_type"]) is not { } type || Array.IndexOf(MediaTypes, type) < 0)
+                {
+                    throw VideoFault(id, $"frame {n}: media_type must be one of {string.Join(", ", MediaTypes)}");
+                }
+            }
+            if (video["fps"] is { } fpsNode && (!IsFinite(fpsNode, out var fps) || fps <= 0 || fps > MaxFps))
+            {
+                throw VideoFault(id, $"fps must be a number above 0 and at most {Shortest(MaxFps)}");
+            }
+            foreach (var name in new[] { "start", "end" })
+            {
+                if (video[name] is { } node && (!IsFinite(node, out var value) || value < 0))
+                {
+                    throw VideoFault(id, $"{name} must be a number of seconds, at least 0");
+                }
+            }
+            if (video["end"] is { } endNode && IsFinite(endNode, out var end))
+            {
+                var start = IsFinite(video["start"], out var s) ? s : 0;
+                if (end <= start)
+                {
+                    throw VideoFault(id, "end must be after start");
+                }
+            }
+        }
+    }
+
+    private static BadRequestError VideoFault(string id, string problem) =>
+        BadRequest($"Video '{id}': {problem}.", "api_usage_error", null);
+
+    /// <summary>A JSON number (never a boolean) that is finite.</summary>
+    private static bool IsFinite(JsonNode? node, out double value) =>
+        JsonValues.TryDouble(node, out value) && double.IsFinite(value);
+
+    /// <summary>A number as the shortest decimal that reads back the same: <c>1.5</c>, <c>4</c>.</summary>
+    private static string Shortest(double value) => value.ToString("R", CultureInfo.InvariantCulture);
 
     // ------------------------------------------------------------------ sessions
 

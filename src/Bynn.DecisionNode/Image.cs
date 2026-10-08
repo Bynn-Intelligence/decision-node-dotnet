@@ -16,7 +16,7 @@ namespace Bynn.DecisionNode;
 /// <para>
 /// Local bytes (a file, a byte array, a stream or base64 text) are checked on this machine
 /// before any request: JPEG, PNG or WebP by their first bytes, at most 10 MB each, at most
-/// 40 megapixels read from the image header, and at most 4 images in a request. A request
+/// 40 megapixels read from the image header, and at most 16 images in a request. A request
 /// whose local images total under the client's inline threshold
 /// (<see cref="DecisionNodeClient.DefaultInlineThreshold"/>, 512 KiB) carries them inline as
 /// base64; at or above it they are uploaded once with <c>POST /v1/uploads</c> and named by

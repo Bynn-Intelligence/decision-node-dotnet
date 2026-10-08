@@ -1014,7 +1014,13 @@ public sealed class Session : IAsyncDisposable
     }
 
     internal static Usage? UsageOf(JsonNode? node) =>
-        node is JsonObject usage ? new Usage(JsonValues.AsLong(usage["input_tokens"]), JsonValues.AsLong(usage["output_tokens"])) : null;
+        node is JsonObject usage
+            ? new Usage(
+                JsonValues.AsLong(usage["input_tokens"]),
+                JsonValues.AsLong(usage["output_tokens"]),
+                JsonValues.AsLong(usage["video_frames"]),
+                JsonValues.TryDouble(usage["video_seconds"], out var seconds) ? seconds : null)
+            : null;
 
     private static bool IsLoopback(string host) =>
         string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) || host is "127.0.0.1" or "[::1]" or "::1";

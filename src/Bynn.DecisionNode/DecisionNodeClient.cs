@@ -29,10 +29,10 @@ namespace Bynn.DecisionNode;
 public sealed partial class DecisionNodeClient : IDisposable
 {
     /// <summary>This library's version, sent in the User-Agent header.</summary>
-    public const string Version = "0.1.0";
+    public const string Version = "0.2.0";
 
     /// <summary>The version of the DecisionNode SDK specification this library implements.</summary>
-    public const string SpecVersion = "1.1";
+    public const string SpecVersion = "1.2";
 
     /// <summary>
     /// Local image bytes in one request (or one session frame, or one batch line) that
@@ -335,22 +335,24 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     // ------------------------------------------------------------------ the surface
 
-    /// <summary>Sends one decision: a state, questions by id, and optional images.</summary>
+    /// <summary>Sends one decision: a state, questions by id, and optional images and videos.</summary>
     /// <param name="state">What is judged: a string or any JSON-serialisable value. <c>null</c> sends an empty state.</param>
     /// <param name="questions">The questions, by id. At least one.</param>
-    /// <param name="images">Images sent beside the state. URLs are sent as given; local bytes inline or uploaded by size.</param>
+    /// <param name="images">Images sent beside the state, up to 16. URLs are sent as given; local bytes inline or uploaded by size.</param>
+    /// <param name="videos">Videos sent as frames beside the state, up to 4. Frames always go inline.</param>
     /// <param name="model">The model for this call; the client's model when <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the call, retries included.</param>
     /// <exception cref="ArgumentException">No questions, or a value that cannot be serialised; nothing is sent.</exception>
-    /// <exception cref="BadRequestError">The request breaks a fixed rule of the API (an image, a question's limits), found before anything is sent.</exception>
+    /// <exception cref="BadRequestError">The request breaks a fixed rule of the API (an image, a video, a question's limits), found before anything is sent.</exception>
     public Task<Decision> DecideAsync(
         object? state,
         IReadOnlyDictionary<string, Question> questions,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
-        var request = Prepare(state, questions, images, model, systemOne: false);
+        var request = Prepare(state, questions, images, videos, model, systemOne: false);
         return SendDecisionAsync(DecidePath, request, cancellationToken);
     }
 
@@ -367,7 +369,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     public void CheckRequest(DecideRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        _ = Prepare(request.State, request.Questions, request.Images, request.Model, systemOne: false);
+        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model, systemOne: false);
     }
 
     /// <summary>
@@ -377,14 +379,14 @@ public sealed partial class DecisionNodeClient : IDisposable
     public void CheckSystemoneRequest(DecideRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        _ = Prepare(request.State, request.Questions, request.Images, request.Model, systemOne: true);
+        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model, systemOne: true);
     }
 
     /// <summary>Sends one decision described by a <see cref="DecideRequest"/>.</summary>
     public Task<Decision> DecideAsync(DecideRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return DecideAsync(request.State, request.Questions, request.Images, request.Model, cancellationToken);
+        return DecideAsync(request.State, request.Questions, request.Images, request.Videos, request.Model, cancellationToken);
     }
 
     /// <summary>
@@ -397,10 +399,11 @@ public sealed partial class DecisionNodeClient : IDisposable
         object? state,
         IReadOnlyDictionary<string, Question> questions,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
-        var request = Prepare(state, questions, images, model, systemOne: true);
+        var request = Prepare(state, questions, images, videos, model, systemOne: true);
         return SendDecisionAsync(SystemOnePath, request, cancellationToken);
     }
 
@@ -424,7 +427,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         var prepared = requests.Select(r =>
         {
             ArgumentNullException.ThrowIfNull(r, nameof(requests));
-            return Prepare(r.State, r.Questions, r.Images, r.Model, systemOne: false);
+            return Prepare(r.State, r.Questions, r.Images, r.Videos, r.Model, systemOne: false);
         }).ToList();
         return DecideManyCoreAsync(prepared, concurrency, cancellationToken);
     }
@@ -460,10 +463,11 @@ public sealed partial class DecisionNodeClient : IDisposable
         object? ifTrue = null,
         object? ifFalse = null,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
-        var d = await DecideAsync(state, One("check", Question.Truth(instructions, ifTrue, ifFalse)), images, model, cancellationToken).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("check", Question.Truth(instructions, ifTrue, ifFalse)), images, videos, model, cancellationToken).ConfigureAwait(false);
         return Single<TruthAnswer>(d, "check");
     }
 
@@ -473,9 +477,10 @@ public sealed partial class DecisionNodeClient : IDisposable
         object? instructions,
         IEnumerable<string> options,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default) =>
-        ClassifyCore(state, Question.Choice(instructions, options), images, model, cancellationToken);
+        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, cancellationToken);
 
     /// <summary>Asks one choice question (id <c>classify</c>) with options mapped to descriptions.</summary>
     public Task<ChoiceAnswer> ClassifyAsync(
@@ -483,9 +488,10 @@ public sealed partial class DecisionNodeClient : IDisposable
         object? instructions,
         IEnumerable<KeyValuePair<string, string>> options,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default) =>
-        ClassifyCore(state, Question.Choice(instructions, options), images, model, cancellationToken);
+        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, cancellationToken);
 
     /// <summary>Asks one choice question (id <c>classify</c>) with options mapped to descriptions of any shape.</summary>
     public Task<ChoiceAnswer> ClassifyAsync(
@@ -493,13 +499,14 @@ public sealed partial class DecisionNodeClient : IDisposable
         object? instructions,
         IEnumerable<KeyValuePair<string, object?>> options,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default) =>
-        ClassifyCore(state, Question.Choice(instructions, options), images, model, cancellationToken);
+        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, cancellationToken);
 
-    private async Task<ChoiceAnswer> ClassifyCore(object? state, Question q, IEnumerable<Image>? images, string? model, CancellationToken ct)
+    private async Task<ChoiceAnswer> ClassifyCore(object? state, Question q, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, CancellationToken ct)
     {
-        var d = await DecideAsync(state, One("classify", q), images, model, ct).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("classify", q), images, videos, model, ct).ConfigureAwait(false);
         return Single<ChoiceAnswer>(d, "classify");
     }
 
@@ -509,10 +516,11 @@ public sealed partial class DecisionNodeClient : IDisposable
         object? instructions,
         IEnumerable<object?> levels,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
-        var d = await DecideAsync(state, One("score", Question.Score(instructions, levels)), images, model, cancellationToken).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("score", Question.Score(instructions, levels)), images, videos, model, cancellationToken).ConfigureAwait(false);
         return Single<ScoreAnswer>(d, "score");
     }
 
@@ -528,10 +536,11 @@ public sealed partial class DecisionNodeClient : IDisposable
         double? max = null,
         double? step = null,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
-        var d = await DecideAsync(state, One("number", Question.Number(instructions, min, max, step)), images, model, cancellationToken).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("number", Question.Number(instructions, min, max, step)), images, videos, model, cancellationToken).ConfigureAwait(false);
         return Single<NumberAnswer>(d, "number");
     }
 
@@ -545,6 +554,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         object action,
         object? context = null,
         IEnumerable<Image>? images = null,
+        IEnumerable<Video>? videos = null,
         string? model = null,
         CancellationToken cancellationToken = default)
     {
@@ -554,7 +564,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         {
             state["context"] = JsonValues.ToNode(context, "the context");
         }
-        return DecideAsync(state, GateQuestions(), images, model, cancellationToken);
+        return DecideAsync(state, GateQuestions(), images, videos, model, cancellationToken);
     }
 
     /// <summary>The three questions <see cref="GateAsync"/> sends.</summary>
@@ -664,7 +674,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// Builds a decision body and checks it by the API's fixed rules, so a request the server
     /// would refuse fails here, before any network call.
     /// </summary>
-    private PreparedRequest Prepare(object? state, IReadOnlyDictionary<string, Question> questions, IEnumerable<Image>? images, string? model, bool systemOne)
+    private PreparedRequest Prepare(object? state, IReadOnlyDictionary<string, Question> questions, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, bool systemOne)
     {
         var qs = QuestionMap(questions, nameof(questions));
         if (systemOne)
@@ -679,15 +689,18 @@ public sealed partial class DecisionNodeClient : IDisposable
             }
         }
         var list = ImageList(images, nameof(images));
+        var videoList = VideoList(videos, nameof(videos));
         var body = new JsonObject
         {
             ["model"] = NonEmpty(model) ?? Model,
             ["state"] = StateNode(state),
             ["questions"] = qs,
         };
+        WithVideos(body, videoList);
         var held = Held(model);
         LocalChecks.Request(body, list.Count, systemOne ? LocalChecks.SystemOne : LocalChecks.Decide, held);
         LocalChecks.Images(list, held);
+        LocalChecks.Videos(videoList, list.Select(i => i.Id), held);
         return new PreparedRequest(body, list);
     }
 
@@ -722,6 +735,30 @@ public sealed partial class DecisionNodeClient : IDisposable
             }
         }
         return list;
+    }
+
+    /// <summary>The videos' wire forms, as given. The caller checks them with the request.</summary>
+    internal static List<JsonObject> VideoList(IEnumerable<Video>? videos, string argument)
+    {
+        var list = new List<JsonObject>();
+        if (videos is not null)
+        {
+            foreach (var video in videos)
+            {
+                ArgumentNullException.ThrowIfNull(video, argument);
+                list.Add(video.Wire);
+            }
+        }
+        return list;
+    }
+
+    /// <summary>Adds <c>videos</c> to a body when there are any; left out otherwise.</summary>
+    internal static void WithVideos(JsonObject body, List<JsonObject> videos)
+    {
+        if (videos.Count > 0)
+        {
+            body["videos"] = new JsonArray(videos.Select(v => (JsonNode?)v.DeepClone()).ToArray());
+        }
     }
 
     internal static JsonNode StateNode(object? state) =>

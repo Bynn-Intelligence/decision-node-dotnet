@@ -322,6 +322,7 @@ public sealed class BatchesClient
         {
             var qs = DecisionNodeClient.QuestionMap(request.Questions, nameof(requests));
             var images = DecisionNodeClient.ImageList(request.Images, nameof(requests));
+            var videos = DecisionNodeClient.VideoList(request.Videos, nameof(requests));
             var model = string.IsNullOrEmpty(request.Model) ? _client.Model : request.Model;
             var body = new JsonObject
             {
@@ -329,9 +330,11 @@ public sealed class BatchesClient
                 ["state"] = DecisionNodeClient.StateNode(request.State),
                 ["questions"] = qs,
             };
+            DecisionNodeClient.WithVideos(body, videos);
             var held = _client.Held(model);
             LocalChecks.Request(body, images.Count, LocalChecks.Decide, held);
             LocalChecks.Images(images, held);
+            LocalChecks.Videos(videos, images.Select(i => i.Id), held);
             var line = new JsonObject { ["custom_id"] = request.CustomId };
             foreach (var (key, value) in body.ToList())
             {
@@ -355,7 +358,7 @@ public sealed class BatchesClient
             if (images.Count > 0)
             {
                 var (wires, _) = await _client.PlaceImagesAsync(images, ct).ConfigureAwait(false);
-                line["images"] = wires;
+                DecisionNodeClient.SetImages(line, wires!);
             }
             var bytes = JsonValues.ToUtf8(line);
             var withNewline = new byte[bytes.Length + 1];
@@ -411,8 +414,11 @@ public sealed class BatchRequest
     /// <summary>The questions, by id. At least one.</summary>
     public required IReadOnlyDictionary<string, Question> Questions { get; init; }
 
-    /// <summary>Images, placed by the client's inline threshold for this line alone.</summary>
+    /// <summary>Images, up to 16, placed by the client's inline threshold for this line alone.</summary>
     public IReadOnlyList<Image>? Images { get; init; }
+
+    /// <summary>Videos sent as frames, up to 4; their frames go inline in the line.</summary>
+    public IReadOnlyList<Video>? Videos { get; init; }
 
     /// <summary>The model for this request; the client's model when <c>null</c> or empty.</summary>
     public string? Model { get; init; }

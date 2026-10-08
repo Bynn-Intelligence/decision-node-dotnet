@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 env:
-  # The conformance suite commit this library is tested against (suite 1.6). The one
+  # The conformance suite commit this library is tested against (suite 1.7). The one
   # place it is set; move it forward deliberately, never to a branch.
-  DECISIONNODE_CONFORMANCE_REF: f3138afe4360ec9f94ff740901498a2ef07b3ea5
+  DECISIONNODE_CONFORMANCE_REF: ebb337ff649eb6b73cb55761c4932372d02d8322
 
 jobs:
   test:

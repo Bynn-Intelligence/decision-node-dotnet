@@ -67,10 +67,10 @@ public sealed partial class DecisionNodeClient
                 todo.Add(i);
             }
         }
-        // The API takes up to 4 files per presign.
-        for (var start = 0; start < todo.Count; start += LocalChecks.MaxImages)
+        // The API takes up to 16 files per presign.
+        for (var start = 0; start < todo.Count; start += LocalChecks.MaxUploadFiles)
         {
-            var chunk = todo.Skip(start).Take(LocalChecks.MaxImages).ToList();
+            var chunk = todo.Skip(start).Take(LocalChecks.MaxUploadFiles).ToList();
             var uploaded = await UploadImagesAsync(chunk.Select(i => list[i]).ToList(), cancellationToken).ConfigureAwait(false);
             for (var k = 0; k < chunk.Count; k++)
             {
@@ -92,7 +92,7 @@ public sealed partial class DecisionNodeClient
             var (wires, placed) = await PlaceImagesAsync(images, ct).ConfigureAwait(false);
             if (wires is not null)
             {
-                body["images"] = wires;
+                SetImages(body, wires);
             }
             try
             {
@@ -102,6 +102,17 @@ public sealed partial class DecisionNodeClient
             {
                 _uploads.Drop(placed);
             }
+        }
+    }
+
+    /// <summary>Sets a body's <c>images</c>, keeping its <c>videos</c> after them.</summary>
+    internal static void SetImages(JsonObject body, JsonArray wires)
+    {
+        body.Remove("videos", out var videos);
+        body["images"] = wires;
+        if (videos is not null)
+        {
+            body["videos"] = videos;
         }
     }
 

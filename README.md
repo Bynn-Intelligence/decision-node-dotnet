@@ -75,18 +75,18 @@ Answers are read by question id: `d["route"]`, or typed with `d.Truth(id)`, `d.C
 
 | Method | Does |
 |---|---|
-| `DecideAsync(state, questions, images, model)` | One decision with any number of questions |
+| `DecideAsync(state, questions, images, videos, model)` | One decision with any number of questions, up to 16 images and up to 4 videos |
 | `DecideManyAsync(requests, concurrency = 8)` | Many decisions, at most `concurrency` at a time over shared connections. One `DecisionResult` per request, in input order, holding a `Decision` or the `Error` that request ended with. One failure does not stop the others. Every request is checked before any is sent: a `concurrency` below 1 or a bad argument throws `ArgumentException`, and a request that breaks one of the API's fixed rules throws its `BadRequestError` or `ValidationError`, with nothing sent. An image shared by several requests is uploaded once. |
-| `CheckAsync(state, instructions, ifTrue, ifFalse, images, model)` | One yes-or-no question; returns its `TruthAnswer` |
-| `ClassifyAsync(state, instructions, options, images, model)` | One choice question; returns its `ChoiceAnswer` |
-| `ScoreAsync(state, instructions, levels, images, model)` | One score question; returns its `ScoreAnswer` |
-| `NumberAsync(state, instructions, min, max, step, images, model)` | One number question; returns its `NumberAnswer` |
-| `SystemoneAsync(state, questions, images, model)` | One decision on `POST /v1/systemone`, the strict path. Truth questions are sent with that path's wire type and read back as `TruthAnswer` |
+| `CheckAsync(state, instructions, ifTrue, ifFalse, images, videos, model)` | One yes-or-no question; returns its `TruthAnswer` |
+| `ClassifyAsync(state, instructions, options, images, videos, model)` | One choice question; returns its `ChoiceAnswer` |
+| `ScoreAsync(state, instructions, levels, images, videos, model)` | One score question; returns its `ScoreAnswer` |
+| `NumberAsync(state, instructions, min, max, step, images, videos, model)` | One number question; returns its `NumberAnswer` |
+| `SystemoneAsync(state, questions, images, videos, model)` | One decision on `POST /v1/systemone`, the strict path. Truth questions are sent with that path's wire type and read back as `TruthAnswer` |
 | `UploadAsync(images)` | Uploads images whatever their size and returns one `upload_id` each (see Images) |
 | `OpenSessionAsync(state, questions, instructions, model, window, ttlSeconds)` | Opens a session (see Sessions) |
 | `SuperviseAsync(body, feed, onReply)` | Keeps a feed of readings answered, reopening sessions as needed (see Sessions) |
 | `Batches.*`, `RunBatchAsync(requests, pollInterval, timeout)` | The Batch API (see Batches) |
-| `GateAsync(action, context, images, model)` | Judges an action before it runs: a `risk` score, a `touches_production` truth and an `allow`, `confirm` or `block` verdict |
+| `GateAsync(action, context, images, videos, model)` | Judges an action before it runs: a `risk` score, a `touches_production` truth and an `allow`, `confirm` or `block` verdict |
 | `ModelsAsync()` | The models and their published limits, one `ModelInfo` each |
 | `DecideRawAsync(body)` | Sends a body exactly as given and returns the parsed response. For API fields this version does not know yet. |
 
@@ -105,7 +105,7 @@ var results = await dn.DecideManyAsync(tickets.Select(t => new DecideRequest
 }));
 ```
 
-Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0.
+Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos).
 
 `GateAsync` sends the state `{"action": ..., "context": ...}` and three questions with fixed wording, the same in every official DecisionNode SDK:
 
@@ -135,13 +135,51 @@ var d = await dn.DecideAsync(
 | `Image.FromBytes(id, data)` with a `byte[]` or `ReadOnlyMemory<byte>`, `FromStream`, `FromStreamAsync`, `FromBase64` | As local bytes. The bytes are not copied |
 | `Image.FromUploadId(id, uploadId)` | As given, an upload from `UploadAsync` |
 
-Local bytes are checked on your machine before any request: JPEG, PNG or WebP by their first bytes (a `mediaType` you give must match them), at most 10 MB, at most 40 megapixels read from the image header without decoding it, at most 4 images in a request (URLs included), and ids unique. A request that breaks one of these rules throws `BadRequestError` with nothing sent. No image is resized or re-encoded.
+Local bytes are checked on your machine before any request: JPEG, PNG or WebP by their first bytes (a `mediaType` you give must match them), at most 10 MB, at most 40 megapixels read from the image header without decoding it, at most 16 images in a request (URLs included), and ids unique. A request that breaks one of these rules throws `BadRequestError` with nothing sent. No image is resized or re-encoded.
 
 Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect. A `PUT` refused because its URL's five minutes ran out is presigned again once. Each `PUT` attempt has its own timeout, `uploadTimeout` (60 seconds by default), apart from the API's `timeout`.
 
 Uploads are remembered by content in the client's memory (at most 256, least recently used out first) until 5 minutes before they expire, so an image you send again, in a later call, in `DecideManyAsync` or in a session frame, goes by its `upload_id` whatever its size. If the server answers that an upload the library placed has expired or was used up, the library uploads it again and sends the request once more. `UploadAsync(images)` uploads whatever the size and returns each `upload_id`, which any key of the workspace can name for an hour.
 
 Text in the state or the instructions can refer to an image by its id.
+
+## Videos
+
+Video is available when the API enables it. A video is sent as the frames you sampled, each with its time in seconds: only frames leave your machine, never a video file, a video URL or its sound. Every question sees every video, the images and the state, in order and in time.
+
+Build a `Video` from frames you already hold, such as the JPEGs a camera writes:
+
+```csharp
+var frames = Directory.GetFiles("dock/frames", "*.jpg")
+    .Order()
+    .Select((path, i) => Frame.FromBytes(t: i * 0.5, File.ReadAllBytes(path)));
+
+var d = await dn.DecideAsync(
+    state: "Warehouse camera 4, loading dock, shift B.",
+    questions: new Dictionary<string, Question>
+    {
+        ["fall"] = Truth("Does a person fall in the video?"),
+        ["forklifts"] = Number("How many forklifts pass the door?", min: 0, max: 50),
+    },
+    videos: new[] { Video.Of("dock", frames, fps: 2) });
+
+Console.WriteLine(d.Truth("fall").Truth);
+Console.WriteLine(d.Usage.VideoFrames);  // the frames read
+Console.WriteLine(d.Usage.VideoSeconds); // the seconds of video read
+```
+
+| Made with | Sent |
+|---|---|
+| `Frame.FromBytes(t, data, mediaType)` | The bytes as base64. Without `mediaType` the type is detected from the first bytes (JPEG, PNG or WebP) |
+| `Frame.FromBase64(t, text, mediaType)` | The text exactly as given, with its media type |
+| `Video.Of(id, frames, fps, start, end)` | `{id, fps, start, end, frames}`. `fps` caps the frames read a second (above 0, at most 4; the server reads up to 2 a second when it is left out), and `start` and `end` cut a window on the frames' own times. Each is left out when not given |
+| `Video.FromJson(...)`, `Frame.FromJson(...)` | The API's wire form, as given |
+
+Frames always go inline: they are never uploaded, never cached and never resized or re-encoded, and they do not count toward the inline threshold for images. Up to 4 videos go with up to 16 images in one request, and a video's id must differ from every image's id. Before anything is sent the library checks each video's id, its frames (at least one; each time a number of at least 0, larger than the one before it; JPEG, PNG or WebP), `fps`, `start` and `end`, and throws the `BadRequestError` the API would answer, with nothing sent. How many frames a request may carry, the frames' bytes and sizes, and the token budget are the server's to judge. When the server reads a video at a lower rate or resolution than asked, it says so in `Decision.Warnings`.
+
+Videos go with `DecideAsync`, `SystemoneAsync`, the helpers, `DecideManyAsync` and batch lines (`BatchRequest.Videos`). Sessions take no videos.
+
+To turn a video file into frames, use the `dn` command line: `dn truth "Does a person fall?" --video dock.mp4` samples the file on your machine and sends only the frames.
 
 ## Sessions
 
@@ -335,7 +373,7 @@ The library sends no telemetry and no request other than to the base URL, the st
 
 ## Versioning
 
-This library implements version 1.1 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
+This library implements version 1.2 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 
@@ -347,7 +385,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.6); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.7); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 

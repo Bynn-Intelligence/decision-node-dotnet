@@ -27,8 +27,19 @@ public sealed class Decision
             throw new DecisionNodeError("the response field 'answers' is not a JSON object");
         }
         Answers = new ReadOnlyDictionary<string, Answer>(answers);
-        var usage = body["usage"] as JsonObject;
-        Usage = new Usage(JsonValues.AsLong(usage?["input_tokens"]), JsonValues.AsLong(usage?["output_tokens"]));
+        Usage = Session.UsageOf(body["usage"]) ?? new Usage(null, null);
+        var warnings = new List<string>();
+        if (body["warnings"] is JsonArray sent)
+        {
+            foreach (var warning in sent)
+            {
+                if (JsonValues.AsString(warning) is { } text)
+                {
+                    warnings.Add(text);
+                }
+            }
+        }
+        Warnings = warnings.AsReadOnly();
         RequestId = header("x-request-id");
         LatencyMs = double.TryParse(header("x-decisionnode-latency-ms"), NumberStyles.Float, CultureInfo.InvariantCulture, out var ms) ? ms : null;
         Safety = Safety.Parse(header("x-decisionnode-safety"));
@@ -50,8 +61,14 @@ public sealed class Decision
     /// <summary>The model version that answered, for example <c>decisionnode-1.0</c>.</summary>
     public string? Model { get; }
 
-    /// <summary>The tokens the request used.</summary>
+    /// <summary>The tokens the request used, and for a request with videos the frames and seconds read.</summary>
     public Usage Usage { get; }
+
+    /// <summary>
+    /// The server's notes on the request exactly as sent, for example that it read a video at
+    /// a lower rate or resolution than asked. Empty when the response has none.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; }
 
     /// <summary>The <c>x-request-id</c> response header.</summary>
     public string? RequestId { get; }
@@ -78,10 +95,12 @@ public sealed class Decision
     public NumberAnswer Number(string id) => this[id].AsNumber();
 }
 
-/// <summary>Token counts of a decision.</summary>
-/// <param name="InputTokens">Tokens in the request, images included.</param>
+/// <summary>Token counts of a decision, and what was read of its videos.</summary>
+/// <param name="InputTokens">Tokens in the request, images and videos included.</param>
 /// <param name="OutputTokens">Tokens generated.</param>
-public sealed record Usage(long? InputTokens, long? OutputTokens);
+/// <param name="VideoFrames">The frames read over all videos; <c>null</c> for a request without videos.</param>
+/// <param name="VideoSeconds">The seconds of the video windows read, as received; <c>null</c> for a request without videos.</param>
+public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null);
 
 /// <summary>A model listed by <c>GET /v1/models</c>.</summary>
 public sealed class ModelInfo
@@ -164,8 +183,11 @@ public sealed class DecideRequest
     /// <summary>The questions, by id. At least one.</summary>
     public required IReadOnlyDictionary<string, Question> Questions { get; init; }
 
-    /// <summary>Images sent beside the state.</summary>
+    /// <summary>Images sent beside the state, up to 16.</summary>
     public IReadOnlyList<Image>? Images { get; init; }
+
+    /// <summary>Videos sent as frames beside the state, up to 4.</summary>
+    public IReadOnlyList<Video>? Videos { get; init; }
 
     /// <summary>The model for this request; the client's model when <c>null</c> or empty.</summary>
     public string? Model { get; init; }
