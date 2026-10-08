@@ -117,7 +117,6 @@ public class SpecOneOneTests
         yield return new object[] { new[] { Image.FromBytes("a", png), Image.FromUrl("b", "https://x.example/1"), Image.FromUrl("c", "https://x.example/2"), Image.FromUrl("d", "https://x.example/3"), Image.FromUrl("e", "https://x.example/4") } };
         yield return new object[] { new[] { Image.FromBytes("a", png), Image.FromBytes("a", png) } };
         yield return new object[] { new[] { Image.FromUrl("u", "http://x.example/r.jpg") } };
-        yield return new object[] { new[] { Image.FromUrl("u", "https://x.example/" + new string('a', 2048)) } };
         yield return new object[] { new[] { Image.FromBytes("g", Fixtures.Read("pixel.gif"), "image/gif") } };
         yield return new object[] { new[] { Image.FromBytes("j", png, "image/jpeg") } };
         var big = new byte[10 * 1024 * 1024 + 1];
@@ -133,6 +132,80 @@ public class SpecOneOneTests
         using var dn = Client(stub);
         var error = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync("s", OneTruth(), images));
         Assert.Equal("api_usage_error", error.ErrorType);
+        Assert.Empty(stub.Requests);
+    }
+
+    [Theory]
+    [InlineData("https://files.example.com:8443/r.jpg")]
+    [InlineData("https://user:secret@files.example.com/r.jpg")]
+    [InlineData("https://169.254.169.254/latest/meta-data")]
+    [InlineData("https://10.1.2.3/r.jpg")]
+    [InlineData("https://[::1]/r.jpg")]
+    [InlineData("https://[::ffff:127.0.0.1]/r.jpg")]
+    [InlineData("https://[64:ff9b::a9fe:a9fe]/r.jpg")]
+    [InlineData("https:///r.jpg")]
+    public async Task UrlsTheServerWouldRefuseAreRefusedLocally(string url)
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        var error = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync("s", OneTruth(), new[] { Image.FromUrl("u", url) }));
+        Assert.Equal("image_url_refused", error.ErrorType);
+        Assert.Empty(stub.Requests);
+    }
+
+    [Theory]
+    [InlineData("https://files.example.com/r.jpg")]
+    [InlineData("https://files.example.com:443/r.jpg")]
+    [InlineData("https://8.8.8.8/r.jpg")]
+    [InlineData("https://10.example.com/r.jpg")]
+    public async Task OrdinaryUrlsPass(string url)
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        await dn.DecideAsync("s", OneTruth(), new[] { Image.FromUrl("u", url) });
+        Assert.Single(stub.Requests);
+    }
+
+    [Fact]
+    public async Task NumberGridFaultsCarryTheServersEntries()
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        var error = await Assert.ThrowsAsync<ValidationError>(() => dn.DecideAsync("s", new Dictionary<string, Question> { ["n"] = Question.Number("?", 60, 50) }));
+        Assert.Null(error.ErrorType);
+        Assert.Equal(
+            """[{"type":"less_than_equal","loc":["body","questions","n","number","min"],"msg":"Input should be less than or equal to 50","input":60,"ctx":{"le":50}}]""",
+            error.Entries!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task NestingOver128IsRefusedAndAt128Passes()
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        JsonNode Nest(int depth)
+        {
+            JsonNode node = "s";
+            for (var i = 0; i < depth; i++)
+            {
+                node = new JsonArray(node);
+            }
+            return node;
+        }
+        var error = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync(Nest(128), OneTruth()));
+        Assert.Equal("Invalid request.", error.Message);
+        await dn.DecideAsync(Nest(127), OneTruth());
+        Assert.Single(stub.Requests);
+    }
+
+    [Fact]
+    public async Task AnUnknownQuestionTypeIsRefusedAndNumberOnSystemone()
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        var unknown = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync("s", new Dictionary<string, Question> { ["q"] = new JsonObject { ["type"] = "rank" } }));
+        Assert.Equal("api_usage_error", unknown.ErrorType);
+        await Assert.ThrowsAsync<BadRequestError>(() => dn.SystemoneAsync("s", new Dictionary<string, Question> { ["n"] = Question.Number("How many?") }));
         Assert.Empty(stub.Requests);
     }
 

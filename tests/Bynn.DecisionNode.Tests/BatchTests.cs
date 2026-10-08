@@ -45,7 +45,8 @@ public class BatchTests
         var calls = stub.Requests.Select(r => r.Body!.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length).ToList();
         Assert.Equal(new[] { 2, 1 }, calls);
         Assert.All(stub.Requests, r => Assert.True(r.Body!.Length <= BatchesClient.MaxAddBytes));
-        await Assert.ThrowsAsync<ArgumentException>(() => dn.Batches.AddAsync("batch_01J9ZB8Q3T", Array.Empty<BatchRequest>()));
+        var empty = await Assert.ThrowsAsync<BadRequestError>(() => dn.Batches.AddAsync("batch_01J9ZB8Q3T", Array.Empty<BatchRequest>()));
+        Assert.Equal("The call holds no requests.", empty.Message);
     }
 
     [Fact]
