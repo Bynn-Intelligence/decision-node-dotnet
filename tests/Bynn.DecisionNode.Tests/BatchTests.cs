@@ -108,6 +108,60 @@ public class BatchTests
     }
 
     [Fact]
+    public async Task ResultsThatStopArrivingTimeOut()
+    {
+        var first = """{"custom_id":"a","status":"expired","body":null,"headers":{}}""" + "\n";
+        var stub = new StubHandler((_, _) => new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StreamContent(new StallingStream(System.Text.Encoding.UTF8.GetBytes(first))) });
+        using var dn = Client(stub, timeout: TimeSpan.FromMilliseconds(300));
+        var read = new List<BatchResult>();
+        await Assert.ThrowsAsync<TimeoutError>(async () =>
+        {
+            await foreach (var r in dn.Batches.ResultsAsync("batch_01J9ZB8Q3T"))
+            {
+                read.Add(r);
+            }
+        });
+        Assert.Single(read);
+    }
+
+    /// <summary>Gives its bytes, then never another one until cancelled.</summary>
+    private sealed class StallingStream : Stream
+    {
+        private readonly byte[] _data;
+        private int _at;
+
+        public StallingStream(byte[] data) => _data = data;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_at < _data.Length)
+            {
+                var n = Math.Min(buffer.Length, _data.Length - _at);
+                _data.AsMemory(_at, n).CopyTo(buffer);
+                _at += n;
+                return n;
+            }
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task RunBatchRefusesAPollIntervalBelowTenSecondsBeforeSending()
     {
         var stub = new StubHandler((_, _) => Ok(Draft));

@@ -256,6 +256,54 @@ public class SpecOneOneTests
         await Assert.ThrowsAsync<DecisionNodeError>(() => session.ConnectAsync());
     }
 
+    [Fact]
+    public void CheckRequestRunsTheChecksAndSendsNothing()
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        var big = new byte[600_000];
+        Fixtures.Read("rgb-7x3.png").CopyTo(big, 0);
+        dn.CheckRequest(new DecideRequest { State = "s", Questions = OneTruth(), Images = new[] { Image.FromBytes("scan", big) } });
+        dn.CheckSystemoneRequest(new DecideRequest { Questions = OneTruth() });
+        dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 64, TtlSeconds = 3600 });
+        dn.Batches.CheckCreate(Array.Empty<BatchRequest>());
+        Assert.Throws<ValidationError>(() => dn.CheckRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?", 60, 50) } }));
+        Assert.Throws<BadRequestError>(() => dn.CheckSystemoneRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?") } }));
+        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 65 }));
+        var repeated = Assert.Throws<BadRequestError>(() => dn.Batches.CheckAdd(new[]
+        {
+            new BatchRequest { CustomId = "a", Questions = OneTruth() },
+            new BatchRequest { CustomId = "a", Questions = OneTruth() },
+        }));
+        Assert.Equal("Line 2: custom_id \"a\" is already in the batch.", repeated.Message);
+        Assert.Throws<BadRequestError>(() => dn.Batches.CheckAdd(Array.Empty<BatchRequest>()));
+        Assert.Empty(stub.Requests);
+    }
+
+    [Fact]
+    public async Task HeldLimitsAreFoundByNameAliasOrVersion()
+    {
+        const string models = """{"models":[{"name":"decisionnode-1.0","version":"decisionnode-1.0","alias":"decisionnode-latest","sessions":{"max_window":16}},{"name":"decisionnode-1.0-flash","version":"decisionnode-1.0-flash","alias":"decisionnode-flash-latest","number_max_grid_values":0}]}""";
+        var stub = new StubHandler((_, _) => Ok(models));
+        using var dn = Client(stub);
+        await dn.ModelsAsync();
+        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-latest" }));
+        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-1.0" }));
+        Assert.Throws<BadRequestError>(() => dn.CheckRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?") }, Model = "decisionnode-flash-latest" }));
+        // A model the list does not state holds nothing: left to the server.
+        dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-9" });
+    }
+
+    [Fact]
+    public void UploadTimeoutDefaultsTo60SecondsAndMustBeAboveZero()
+    {
+        using var dn = new DecisionNodeClient(apiKey: "k");
+        Assert.Equal(TimeSpan.FromSeconds(60), dn.UploadTimeout);
+        using var custom = new DecisionNodeClient(apiKey: "k", uploadTimeout: TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromSeconds(5), custom.UploadTimeout);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DecisionNodeClient(apiKey: "k", uploadTimeout: TimeSpan.Zero));
+    }
+
     [Theory]
     [InlineData(1001, true)]
     [InlineData(1006, true)]
