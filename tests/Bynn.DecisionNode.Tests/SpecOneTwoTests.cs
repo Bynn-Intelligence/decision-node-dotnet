@@ -158,6 +158,31 @@ public class SpecOneTwoTests
         Assert.Equal(message, error.Message);
     }
 
+    [Theory]
+    [InlineData(1.5, "1.5")]
+    [InlineData(4, "4")]
+    [InlineData(1, "1")]
+    [InlineData(0.1, "0.1")]
+    [InlineData(1.0 / 3, "0.333333")]
+    [InlineData(1000.5, "1000.5")]
+    [InlineData(1234567.5, "1.23457e+06")]
+    [InlineData(1e6, "1e+06")]
+    [InlineData(999999.5, "1e+06")]
+    [InlineData(0.0001, "0.0001")]
+    [InlineData(0.00001234, "1.234e-05")]
+    [InlineData(123456.75, "123457")]
+    public void NumbersInVideoMessagesAreWrittenAsTheApiWritesThem(double value, string text)
+    {
+        Assert.Equal(text, Internal.LocalChecks.Printf(value));
+    }
+
+    [Fact]
+    public async Task ALargeFrameTimeIsWrittenWithSixSignificantDigits()
+    {
+        var error = await Refused(c => c.DecideAsync("s", OneTruth(), videos: new[] { Cam(1234567.5, 1) }));
+        Assert.Equal("Video 'cam': frame 1: t must be larger than the frame before it (1.23457e+06).", error.Message);
+    }
+
     [Fact]
     public async Task VideosAreCheckedInEveryCallThatTakesThem()
     {

@@ -650,7 +650,7 @@ internal static class LocalChecks
                 }
                 if (before is { } previous && t <= previous)
                 {
-                    throw VideoFault(id, $"frame {n}: t must be larger than the frame before it ({Shortest(previous)})");
+                    throw VideoFault(id, $"frame {n}: t must be larger than the frame before it ({Printf(previous)})");
                 }
                 before = t;
                 if (JsonValues.AsString(frame["data"]) is null)
@@ -664,7 +664,7 @@ internal static class LocalChecks
             }
             if (video["fps"] is { } fpsNode && (!IsFinite(fpsNode, out var fps) || fps <= 0 || fps > MaxFps))
             {
-                throw VideoFault(id, $"fps must be a number above 0 and at most {Shortest(MaxFps)}");
+                throw VideoFault(id, $"fps must be a number above 0 and at most {Printf(MaxFps)}");
             }
             foreach (var name in new[] { "start", "end" })
             {
@@ -691,8 +691,30 @@ internal static class LocalChecks
     private static bool IsFinite(JsonNode? node, out double value) =>
         JsonValues.TryDouble(node, out value) && double.IsFinite(value);
 
-    /// <summary>A number as the shortest decimal that reads back the same: <c>1.5</c>, <c>4</c>.</summary>
-    private static string Shortest(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+    /// <summary>
+    /// A number as the API writes it in a message, as printf's <c>%g</c> does: six significant
+    /// digits without trailing zeros (<c>1.5</c>, <c>4</c>, <c>0.333333</c>), and the exponent
+    /// form below 0.0001 or from a million (<c>1e+06</c>).
+    /// </summary>
+    internal static string Printf(double value)
+    {
+        if (value == 0)
+        {
+            return double.IsNegative(value) ? "-0" : "0";
+        }
+        // The value rounded to six significant digits gives the exponent that picks the form.
+        var scientific = value.ToString("E5", CultureInfo.InvariantCulture);
+        var e = scientific.IndexOf('E');
+        var exponent = int.Parse(scientific[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+        if (exponent is >= -4 and < 6)
+        {
+            return TrimZeros(value.ToString("F" + (5 - exponent).ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture));
+        }
+        var sign = exponent < 0 ? "-" : "+";
+        return TrimZeros(scientific[..e]) + "e" + sign + Math.Abs(exponent).ToString("00", CultureInfo.InvariantCulture);
+    }
+
+    private static string TrimZeros(string text) => text.Contains('.') ? text.TrimEnd('0').TrimEnd('.') : text;
 
     // ------------------------------------------------------------------ sessions
 
