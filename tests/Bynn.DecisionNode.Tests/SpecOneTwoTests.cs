@@ -9,7 +9,7 @@ public class SpecOneTwoTests
     private static readonly byte[] Jpeg = Fixtures.Read("baseline-3x2.jpg");
     private static readonly byte[] Png = Fixtures.Read("rgb-7x3.png");
 
-    private static Frame JpegFrame(double t) => Frame.FromBytes(t, Jpeg);
+    private static VideoFrame JpegFrame(double t) => VideoFrame.FromBytes(t, Jpeg);
 
     private static Video Cam(params double[] times) => Video.Of("cam", times.Select(JpegFrame));
 
@@ -51,9 +51,9 @@ public class SpecOneTwoTests
         using var dn = Client(stub);
         var video = Video.Of("dock", new[]
         {
-            Frame.FromBytes(30, Jpeg),
-            Frame.FromBytes(30.5, Png, "image/png"),
-            Frame.FromBase64(31, "UklGRg==", "image/webp"),
+            VideoFrame.FromBytes(30, Jpeg),
+            VideoFrame.FromBytes(30.5, Png, "image/png"),
+            VideoFrame.FromBase64(31, "UklGRg==", "image/webp"),
         }, fps: 2, start: 30, end: 31.5);
         await dn.DecideAsync("Dock.", OneTruth(), videos: new[] { video });
 
@@ -100,7 +100,7 @@ public class SpecOneTwoTests
         // The frames total far more than the threshold; the one small image still goes inline.
         var big = new byte[4000];
         Jpeg.CopyTo(big, 0);
-        var video = Video.Of("cam", new[] { Frame.FromBytes(0, big), Frame.FromBytes(1, big) });
+        var video = Video.Of("cam", new[] { VideoFrame.FromBytes(0, big), VideoFrame.FromBytes(1, big) });
         await dn.DecideAsync("s", OneTruth(), new[] { Image.FromBytes("still", Png) }, new[] { video });
         var body = (JsonObject)Assert.Single(stub.Requests).Json!;
         Assert.Equal(new[] { "model", "state", "questions", "images", "videos" }, body.Select(kv => kv.Key));
@@ -113,7 +113,7 @@ public class SpecOneTwoTests
         var stub = new StubHandler((_, _) => Ok());
         using var dn = Client(stub);
         var wire = JsonNode.Parse("""{"id":"cam","fps":1,"frames":[{"t":0,"media_type":"image/jpeg","data":"AAAA"},{"t":1,"media_type":"image/jpeg","data":"AAAA"}]}""")!.AsObject();
-        await dn.DecideAsync("s", OneTruth(), videos: new[] { Video.FromJson(wire), Video.Of("v2", new[] { Frame.FromJson(JsonNode.Parse("""{"t":2,"media_type":"image/png","data":"BBBB"}""")!.AsObject()) }) });
+        await dn.DecideAsync("s", OneTruth(), videos: new[] { Video.FromJson(wire), Video.Of("v2", new[] { VideoFrame.FromJson(JsonNode.Parse("""{"t":2,"media_type":"image/png","data":"BBBB"}""")!.AsObject()) }) });
         var videos = (JsonArray)Assert.Single(stub.Requests).Json!["videos"]!;
         Assert.True(JsonNode.DeepEquals(wire, videos[0]));
         Assert.Equal("BBBB", (string?)videos[1]!["frames"]![0]!["data"]);
@@ -126,15 +126,15 @@ public class SpecOneTwoTests
         yield return new object?[] { new[] { Video.Of("", new[] { frame }) }, null, "Video 0 needs an id." };
         yield return new object?[] { new[] { Video.Of("cam", new[] { frame }), Video.Of("cam", new[] { frame }) }, null, "Video id 'cam' is used twice (ids are unique across images and videos)." };
         yield return new object?[] { new[] { Video.Of("gate", new[] { frame }) }, Image.FromUrl("gate", "https://x.example/g.jpg"), "Video id 'gate' is used twice (ids are unique across images and videos)." };
-        yield return new object?[] { new[] { Video.Of("cam", Array.Empty<Frame>()) }, null, "Video 'cam': frames must be a non-empty list of frames." };
+        yield return new object?[] { new[] { Video.Of("cam", Array.Empty<VideoFrame>()) }, null, "Video 'cam': frames must be a non-empty list of frames." };
         yield return new object?[] { new[] { Cam(-0.5) }, null, "Video 'cam': frame 0: t must be a number of seconds, at least 0." };
         yield return new object?[] { new[] { Cam(double.NaN) }, null, "Video 'cam': frame 0: t must be a number of seconds, at least 0." };
         yield return new object?[] { new[] { Cam(0, 1.5, 1) }, null, "Video 'cam': frame 2: t must be larger than the frame before it (1.5)." };
         yield return new object?[] { new[] { Cam(1.5, 1.5) }, null, "Video 'cam': frame 1: t must be larger than the frame before it (1.5)." };
         yield return new object?[] { new[] { Cam(1, 0.5) }, null, "Video 'cam': frame 1: t must be larger than the frame before it (1)." };
-        yield return new object?[] { new[] { Video.Of("cam", new[] { Frame.FromBase64(0, "AAAA", null) }) }, null, "Video 'cam': frame 0: media_type must be one of image/jpeg, image/png, image/webp." };
-        yield return new object?[] { new[] { Video.Of("cam", new[] { frame, Frame.FromBytes(0.5, Fixtures.Read("pixel.gif")) }) }, null, "Video 'cam': frame 1: media_type must be one of image/jpeg, image/png, image/webp." };
-        yield return new object?[] { new[] { Video.Of("cam", new[] { Frame.FromBase64(0, "R0lG", "image/gif") }) }, null, "Video 'cam': frame 0: media_type must be one of image/jpeg, image/png, image/webp." };
+        yield return new object?[] { new[] { Video.Of("cam", new[] { VideoFrame.FromBase64(0, "AAAA", null) }) }, null, "Video 'cam': frame 0: media_type must be one of image/jpeg, image/png, image/webp." };
+        yield return new object?[] { new[] { Video.Of("cam", new[] { frame, VideoFrame.FromBytes(0.5, Fixtures.Read("pixel.gif")) }) }, null, "Video 'cam': frame 1: media_type must be one of image/jpeg, image/png, image/webp." };
+        yield return new object?[] { new[] { Video.Of("cam", new[] { VideoFrame.FromBase64(0, "R0lG", "image/gif") }) }, null, "Video 'cam': frame 0: media_type must be one of image/jpeg, image/png, image/webp." };
         yield return new object?[] { new[] { Video.Of("cam", new[] { frame }, fps: 0) }, null, "Video 'cam': fps must be a number above 0 and at most 4." };
         yield return new object?[] { new[] { Video.Of("cam", new[] { frame }, fps: 5) }, null, "Video 'cam': fps must be a number above 0 and at most 4." };
         yield return new object?[] { new[] { Video.Of("cam", new[] { frame }, start: -1) }, null, "Video 'cam': start must be a number of seconds, at least 0." };
@@ -218,7 +218,7 @@ public class SpecOneTwoTests
     {
         var stub = new StubHandler((_, _) => Ok());
         using var dn = Client(stub);
-        var many = Video.Of("cam", Enumerable.Range(0, 1100).Select(i => Frame.FromBase64(i * 0.5, "not an image", "image/png")));
+        var many = Video.Of("cam", Enumerable.Range(0, 1100).Select(i => VideoFrame.FromBase64(i * 0.5, "not an image", "image/png")));
         await dn.DecideAsync("s", OneTruth(), videos: new[] { many });
         Assert.Equal(1100, ((JsonArray)Assert.Single(stub.Requests).Json!["videos"]![0]!["frames"]!).Count);
     }

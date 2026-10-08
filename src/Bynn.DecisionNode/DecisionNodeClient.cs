@@ -698,7 +698,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         };
         WithVideos(body, videoList);
         var held = Held(model);
-        LocalChecks.Request(body, list.Count, systemOne ? LocalChecks.SystemOne : LocalChecks.Decide, held);
+        LocalChecks.Request(body, list.Select(i => i.Id).ToList(), systemOne ? LocalChecks.SystemOne : LocalChecks.Decide, held);
         LocalChecks.Images(list, held);
         LocalChecks.Videos(videoList, list.Select(i => i.Id), held);
         return new PreparedRequest(body, list);

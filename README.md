@@ -55,6 +55,8 @@ The values you read are the values the API sent: nothing is rounded, renormalise
 | `Choice(instructions, options)` | Which one option fits? `options` is a list of names or a map of name to description. | `ChoiceAnswer.Choice`, `.Confidence`, `.Probabilities` by option name |
 | `Score(instructions, levels)` | Where on this scale, from low to high? Up to 10 levels. | `ScoreAnswer.Score`, `.Confidence`, `.Probabilities` and `.Legend` by level index |
 | `Number(instructions, min, max, step)` | Which value on this grid? Defaults 0, 255 and 1 when left out; at most 4,096 values. | `NumberAnswer.Number`, `.Expected`, `.Confidence`, `.Probabilities` by value as the server wrote it (`"7"`, `"3.5"`) |
+| `Point(instructions, image, units)` | Where is it in the image? One spot. | `PointAnswer.X`, `.Y`, `.Present`, `.Confidence`, `.Image`, `.Width`, `.Height` (see Points and boxes) |
+| `Box(instructions, image, units)` | Where is it in the image? A rectangle. | `BoxAnswer.X1`, `.Y1`, `.X2`, `.Y2`, `.Present`, `.Confidence`, `.Image`, `.Width`, `.Height` |
 
 `state`, instructions, descriptions and levels take a string or any JSON-serialisable value: an anonymous object, a record, a `JsonNode`. The wire form works too, so a request copied from the API documentation runs unchanged:
 
@@ -69,7 +71,7 @@ Console.WriteLine(cars.Number);     // 7
 Console.WriteLine(cars.Confidence); // 0.78
 ```
 
-Answers are read by question id: `d["route"]`, or typed with `d.Truth(id)`, `d.Choice(id)`, `d.Score(id)` and `d.Number(id)`. An answer of a type this version does not know yet, or of a known type with a missing or wrongly typed field, comes back as an `UnknownAnswer` with its type in `Type` and its fields in `Raw`; the rest of the decision parses as usual. The helpers `CheckAsync`, `ClassifyAsync`, `ScoreAsync` and `NumberAsync` promise a typed answer, so when their own answer is missing or malformed they throw a `ServerError` (with `Status`, `RequestId` and `Reason`) instead.
+Answers are read by question id: `d["route"]`, or typed with `d.Truth(id)`, `d.Choice(id)`, `d.Score(id)`, `d.Number(id)`, `d.Point(id)` and `d.Box(id)`. An answer of a type this version does not know yet, or of a known type with a missing or wrongly typed field, comes back as an `UnknownAnswer` with its type in `Type` and its fields in `Raw`; the rest of the decision parses as usual. The helpers `CheckAsync`, `ClassifyAsync`, `ScoreAsync` and `NumberAsync` promise a typed answer, so when their own answer is missing or malformed they throw a `ServerError` (with `Status`, `RequestId` and `Reason`) instead.
 
 ## The client
 
@@ -143,16 +145,51 @@ Uploads are remembered by content in the client's memory (at most 256, least rec
 
 Text in the state or the instructions can refer to an image by its id.
 
+## Points and boxes
+
+A `point` question finds one spot in an image and a `box` question draws a rectangle around something, each with the probability that the thing is there at all:
+
+```csharp
+var d = await dn.DecideAsync(
+    state: "Line 3, camera 2.",
+    questions: new Dictionary<string, Question>
+    {
+        ["pick"] = Point("Point to the yellow package closest to the robot arm."),
+        ["damage"] = Box("Draw a box around the damaged package.", image: "belt"),
+        ["any_damage"] = Truth("Is any package on the belt damaged?"),
+    },
+    images: new[] { Image.FromUrl("belt", "https://files.example.com/line-3/cam-2/0917.jpg") });
+
+var pick = d.Point("pick");
+Console.WriteLine($"{pick.X}, {pick.Y}");     // 812, 455 (pixels from the top-left corner)
+Console.WriteLine(pick.Present);              // 0.97: the package is there
+var damage = d.Box("damage");
+Console.WriteLine($"{damage.X1}, {damage.Y1} to {damage.X2}, {damage.Y2}");
+Console.WriteLine(d.Truth("any_damage").Truth);
+```
+
+| Field | Means |
+|---|---|
+| `X`, `Y` (point) | The spot, from the top-left corner of the image, `X` to the right and `Y` down |
+| `X1`, `Y1`, `X2`, `Y2` (box) | The top-left and bottom-right corners |
+| `Present` | The probability that what the instructions describe is in the image at all. Under a low value the place is only the best guess for something that is probably absent |
+| `Confidence` | The probability that the place is right if the thing is there: for a point, that it lies on the thing; for a box, that it overlaps the true box by an intersection over union of 0.5 or more |
+| `Image`, `Width`, `Height` | The image looked in and its size in pixels, so the answer can be drawn without another lookup |
+
+Coordinates are whole pixels of the image as sent (after its EXIF orientation), or fractions of the width and height from 0 to 1 with `units: "normalized"`. Every number is as received. `image` names the image to look in and is needed when the request carries two or more images; with one image it can be left out.
+
+Before anything is sent the library checks that the request carries an image, that `image` names one of the request's images (a video's id is not an image's), that `units` is `pixels` or `normalized`, and that the question has instructions. A fault throws the `ValidationError` the API would answer, with every fault of the request in its `Entries`, or the `BadRequestError` for missing instructions. Points and boxes go with `DecideAsync`, `DecideManyAsync` and batch lines; `SystemoneAsync`, the strict path, takes neither.
+
 ## Videos
 
-Video is available when the API enables it. A video is sent as the frames you sampled, each with its time in seconds: only frames leave your machine, never a video file, a video URL or its sound. Every question sees every video, the images and the state, in order and in time.
+Ask about a video by sending the frames you sampled, each with its time in seconds. Only frames leave your machine, never a video file, a video URL or its sound. Every question sees every video, the images and the state, in order and in time.
 
-Build a `Video` from frames you already hold, such as the JPEGs a camera writes:
+Build a `Video` and its `VideoFrame`s from frames you already hold, such as the JPEGs a camera writes:
 
 ```csharp
 var frames = Directory.GetFiles("dock/frames", "*.jpg")
     .Order()
-    .Select((path, i) => Frame.FromBytes(t: i * 0.5, File.ReadAllBytes(path)));
+    .Select((path, i) => VideoFrame.FromBytes(t: i * 0.5, File.ReadAllBytes(path)));
 
 var d = await dn.DecideAsync(
     state: "Warehouse camera 4, loading dock, shift B.",
@@ -170,10 +207,10 @@ Console.WriteLine(d.Usage.VideoSeconds); // the seconds of video read
 
 | Made with | Sent |
 |---|---|
-| `Frame.FromBytes(t, data, mediaType)` | The bytes as base64. Without `mediaType` the type is detected from the first bytes (JPEG, PNG or WebP) |
-| `Frame.FromBase64(t, text, mediaType)` | The text exactly as given, with its media type |
+| `VideoFrame.FromBytes(t, data, mediaType)` | The bytes as base64. Without `mediaType` the type is detected from the first bytes (JPEG, PNG or WebP) |
+| `VideoFrame.FromBase64(t, text, mediaType)` | The text exactly as given, with its media type |
 | `Video.Of(id, frames, fps, start, end)` | `{id, fps, start, end, frames}`. `fps` caps the frames read a second (above 0, at most 4; the server reads up to 2 a second when it is left out), and `start` and `end` cut a window on the frames' own times. Each is left out when not given |
-| `Video.FromJson(...)`, `Frame.FromJson(...)` | The API's wire form, as given |
+| `Video.FromJson(...)`, `VideoFrame.FromJson(...)` | The API's wire form, as given |
 
 Frames always go inline: they are never uploaded, never cached and never resized or re-encoded, and they do not count toward the inline threshold for images. Up to 4 videos go with up to 16 images in one request, and a video's id must differ from every image's id. Before anything is sent the library checks each video's id, its frames (at least one; each time a number of at least 0, larger than the one before it; JPEG, PNG or WebP), `fps`, `start` and `end`, and throws the `BadRequestError` the API would answer, with nothing sent. How many frames a request may carry, the frames' bytes and sizes, and the token budget are the server's to judge. When the server reads a video at a lower rate or resolution than asked, it says so in `Decision.Warnings`.
 
@@ -385,7 +422,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.7); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.8); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 

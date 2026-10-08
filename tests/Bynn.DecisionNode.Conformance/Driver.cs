@@ -394,6 +394,24 @@ public static class Driver
                         a["min"] is { } lo ? (double)lo : null,
                         a["max"] is { } hi ? (double)hi : null,
                         a["step"] is { } st ? (double)st : null);
+                case "$point" or "$box":
+                    var type = key[1..];
+                    var image = a!["image"];
+                    var units = a["units"];
+                    if ((image is not null && image.GetValueKind() != System.Text.Json.JsonValueKind.String) ||
+                        (units is not null && units.GetValueKind() != System.Text.Json.JsonValueKind.String))
+                    {
+                        // Not writable with the typed builder: passed in its wire form, checked by the same rules.
+                        var wire = new JsonObject { ["type"] = type };
+                        foreach (var (field, given) in a)
+                        {
+                            wire[field] = given?.DeepClone();
+                        }
+                        return Question.FromJson(wire);
+                    }
+                    return type == "point"
+                        ? Question.Point(a["instructions"]?.DeepClone(), (string?)image, (string?)units)
+                        : Question.Box(a["instructions"]?.DeepClone(), (string?)image, (string?)units);
             }
         }
         return Question.FromJson((JsonObject)Plain(q, ctx)!);
@@ -433,11 +451,11 @@ public static class Driver
         return Video.Of((string)spec["id"]!, frames, fps, start, end);
     }
 
-    private static Bynn.DecisionNode.Frame FrameOf(JsonObject item)
+    private static VideoFrame FrameOf(JsonObject item)
     {
         if (item["$frame"] is not JsonObject spec)
         {
-            return Bynn.DecisionNode.Frame.FromJson(item);
+            return VideoFrame.FromJson(item);
         }
         var mediaType = (string?)spec["media_type"];
         if (!Numeric(spec["t"], out var t) || t is null)
@@ -445,16 +463,16 @@ public static class Driver
             var data = spec["data_text"] is { } text
                 ? (string)text!
                 : Convert.ToBase64String(spec["path"] is { } p ? File.ReadAllBytes(Path.Combine(Suite.Directory, (string)p!)) : Convert.FromBase64String((string)spec["data_base64"]!));
-            return Bynn.DecisionNode.Frame.FromJson(new JsonObject { ["t"] = spec["t"]?.DeepClone(), ["media_type"] = mediaType, ["data"] = data });
+            return VideoFrame.FromJson(new JsonObject { ["t"] = spec["t"]?.DeepClone(), ["media_type"] = mediaType, ["data"] = data });
         }
         if (spec["data_text"] is { } base64)
         {
-            return Bynn.DecisionNode.Frame.FromBase64(t.Value, (string)base64!, mediaType);
+            return VideoFrame.FromBase64(t.Value, (string)base64!, mediaType);
         }
         var bytes = spec["path"] is { } path
             ? File.ReadAllBytes(Path.Combine(Suite.Directory, (string)path!))
             : Convert.FromBase64String((string)spec["data_base64"]!);
-        return Bynn.DecisionNode.Frame.FromBytes(t.Value, bytes, mediaType);
+        return VideoFrame.FromBytes(t.Value, bytes, mediaType);
     }
 
     /// <summary>An absent value, or a JSON number: what a typed factory can take.</summary>
@@ -562,6 +580,32 @@ public static class Driver
                 return new JsonObject { ["kind"] = "score", ["score"] = s.Score, ["confidence"] = s.Confidence, ["probabilities"] = sp, ["legend"] = legend };
             case NumberAnswer n:
                 return new JsonObject { ["kind"] = "number", ["number"] = n.Number, ["expected"] = n.Expected, ["confidence"] = n.Confidence, ["probabilities"] = Map(n.Probabilities) };
+            case PointAnswer p:
+                return new JsonObject
+                {
+                    ["kind"] = "point",
+                    ["x"] = p.X,
+                    ["y"] = p.Y,
+                    ["present"] = p.Present,
+                    ["confidence"] = p.Confidence,
+                    ["image"] = p.Image,
+                    ["width"] = p.Width,
+                    ["height"] = p.Height,
+                };
+            case BoxAnswer b:
+                return new JsonObject
+                {
+                    ["kind"] = "box",
+                    ["x1"] = b.X1,
+                    ["y1"] = b.Y1,
+                    ["x2"] = b.X2,
+                    ["y2"] = b.Y2,
+                    ["present"] = b.Present,
+                    ["confidence"] = b.Confidence,
+                    ["image"] = b.Image,
+                    ["width"] = b.Width,
+                    ["height"] = b.Height,
+                };
             default:
                 return new JsonObject { ["kind"] = "unknown", ["type"] = a.Type, ["raw"] = a.Raw.DeepClone() };
         }

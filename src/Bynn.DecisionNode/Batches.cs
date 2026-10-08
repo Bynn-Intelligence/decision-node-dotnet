@@ -332,7 +332,7 @@ public sealed class BatchesClient
             };
             DecisionNodeClient.WithVideos(body, videos);
             var held = _client.Held(model);
-            LocalChecks.Request(body, images.Count, LocalChecks.Decide, held);
+            LocalChecks.Request(body, images.Select(i => i.Id).ToList(), LocalChecks.Decide, held);
             LocalChecks.Images(images, held);
             LocalChecks.Videos(videos, images.Select(i => i.Id), held);
             var line = new JsonObject { ["custom_id"] = request.CustomId };

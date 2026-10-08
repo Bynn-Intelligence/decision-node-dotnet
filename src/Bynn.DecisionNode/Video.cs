@@ -44,7 +44,7 @@ public sealed class Video
     /// <param name="fps">A cap on the frames read a second, above 0 and at most 4. Left out when <c>null</c>: the server reads up to 2 a second.</param>
     /// <param name="start">The start of the window read, in the frames' own seconds. Left out when <c>null</c> (0).</param>
     /// <param name="end">The end of the window read (not included), after <paramref name="start"/>. Left out when <c>null</c>: every frame from <paramref name="start"/>.</param>
-    public static Video Of(string id, IEnumerable<Frame> frames, double? fps = null, double? start = null, double? end = null)
+    public static Video Of(string id, IEnumerable<VideoFrame> frames, double? fps = null, double? start = null, double? end = null)
     {
         ArgumentNullException.ThrowIfNull(id);
         ArgumentNullException.ThrowIfNull(frames);
@@ -92,11 +92,11 @@ public sealed class Video
 /// One frame of a <see cref="Video"/>: its time in seconds and its image (JPEG, PNG or WebP),
 /// sent inline as base64.
 /// </summary>
-public sealed class Frame
+public sealed class VideoFrame
 {
     private readonly JsonObject _wire;
 
-    private Frame(JsonObject wire)
+    private VideoFrame(JsonObject wire)
     {
         _wire = wire;
     }
@@ -109,17 +109,17 @@ public sealed class Frame
     /// <param name="t">The frame's time in seconds: at least 0, larger than the frame before it in the same video.</param>
     /// <param name="data">The image bytes.</param>
     /// <param name="mediaType"><c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>; detected when <c>null</c> or empty.</param>
-    public static Frame FromBytes(double t, byte[] data, string? mediaType = null)
+    public static VideoFrame FromBytes(double t, byte[] data, string? mediaType = null)
     {
         ArgumentNullException.ThrowIfNull(data);
         return FromBytes(t, data.AsMemory(), mediaType);
     }
 
     /// <summary>A frame from image bytes in memory. As <see cref="FromBytes(double, byte[], string?)"/>.</summary>
-    public static Frame FromBytes(double t, ReadOnlyMemory<byte> data, string? mediaType = null)
+    public static VideoFrame FromBytes(double t, ReadOnlyMemory<byte> data, string? mediaType = null)
     {
         var type = string.IsNullOrEmpty(mediaType) ? ImageHeader.Sniff(data.Span) : mediaType;
-        return new Frame(Wire(t, type, Convert.ToBase64String(data.Span)));
+        return new VideoFrame(Wire(t, type, Convert.ToBase64String(data.Span)));
     }
 
     /// <summary>
@@ -129,17 +129,17 @@ public sealed class Frame
     /// <param name="t">The frame's time in seconds: at least 0, larger than the frame before it in the same video.</param>
     /// <param name="base64">The image as base64 text (standard alphabet), sent exactly as given.</param>
     /// <param name="mediaType"><c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>.</param>
-    public static Frame FromBase64(double t, string base64, string? mediaType)
+    public static VideoFrame FromBase64(double t, string base64, string? mediaType)
     {
         ArgumentNullException.ThrowIfNull(base64);
-        return new Frame(Wire(t, string.IsNullOrEmpty(mediaType) ? null : mediaType, base64));
+        return new VideoFrame(Wire(t, string.IsNullOrEmpty(mediaType) ? null : mediaType, base64));
     }
 
     /// <summary>A frame in the API's wire form, <c>{"t", "media_type", "data"}</c>, sent as given (copied).</summary>
-    public static Frame FromJson(JsonObject wire)
+    public static VideoFrame FromJson(JsonObject wire)
     {
         ArgumentNullException.ThrowIfNull(wire);
-        return new Frame((JsonObject)wire.DeepClone());
+        return new VideoFrame((JsonObject)wire.DeepClone());
     }
 
     /// <summary>The frame's wire form, a copy.</summary>

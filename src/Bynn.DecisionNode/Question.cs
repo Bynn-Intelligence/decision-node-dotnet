@@ -7,7 +7,7 @@ namespace Bynn.DecisionNode;
 /// <summary>
 /// One question in a decision, held in its wire form. Build it with
 /// <see cref="Truth"/>, <see cref="Choice(object?, IEnumerable{string})"/>,
-/// <see cref="Score"/> or <see cref="Number"/>, or pass the wire form itself (a <see cref="JsonObject"/>
+/// <see cref="Score"/>, <see cref="Number"/>, <see cref="Point"/> or <see cref="Box"/>, or pass the wire form itself (a <see cref="JsonObject"/>
 /// converts implicitly), so a request copied from the documentation runs unchanged.
 /// </summary>
 /// <example>
@@ -34,7 +34,7 @@ public sealed class Question
         _wire = wire;
     }
 
-    /// <summary>The question type as sent: <c>truth</c>, <c>choice</c>, <c>score</c>, <c>number</c>, or whatever a wire form names.</summary>
+    /// <summary>The question type as sent: <c>truth</c>, <c>choice</c>, <c>score</c>, <c>number</c>, <c>point</c>, <c>box</c>, or whatever a wire form names.</summary>
     public string? Type => JsonValues.AsString(_wire["type"]);
 
     /// <summary>A copy of the wire form of this question.</summary>
@@ -175,6 +175,45 @@ public sealed class Question
         if (step is { } st)
         {
             q["step"] = NumberNode(st, nameof(step));
+        }
+        return new Question(q);
+    }
+
+    /// <summary>
+    /// One spot in an image, answered as <c>x</c> and <c>y</c> from the image's top-left corner,
+    /// with the probability that the thing is there at all and how sure the place is.
+    /// </summary>
+    /// <param name="instructions">What to find: a phrase, a description with conditions, or a question. Required by the API.</param>
+    /// <param name="image">The id of the image to look in; required when the request carries two or more images. Left out when <c>null</c>.</param>
+    /// <param name="units"><c>pixels</c> (the default) or <c>normalized</c> (fractions of the width and height). Left out when <c>null</c>.</param>
+    public static Question Point(object? instructions, string? image = null, string? units = null) =>
+        Place("point", instructions, image, units);
+
+    /// <summary>
+    /// A rectangle in an image, answered as its top-left (<c>x1</c>, <c>y1</c>) and bottom-right
+    /// (<c>x2</c>, <c>y2</c>) corners, with the probability that the thing is there at all and how
+    /// sure the box is.
+    /// </summary>
+    /// <param name="instructions">What to find: a phrase, a description with conditions, or a question. Required by the API.</param>
+    /// <param name="image">The id of the image to look in; required when the request carries two or more images. Left out when <c>null</c>.</param>
+    /// <param name="units"><c>pixels</c> (the default) or <c>normalized</c> (fractions of the width and height). Left out when <c>null</c>.</param>
+    public static Question Box(object? instructions, string? image = null, string? units = null) =>
+        Place("box", instructions, image, units);
+
+    private static Question Place(string type, object? instructions, string? image, string? units)
+    {
+        var q = new JsonObject { ["type"] = type };
+        if (instructions is not null)
+        {
+            q["instructions"] = JsonValues.ToNode(instructions, "instructions");
+        }
+        if (image is not null)
+        {
+            q["image"] = image;
+        }
+        if (units is not null)
+        {
+            q["units"] = units;
         }
         return new Question(q);
     }

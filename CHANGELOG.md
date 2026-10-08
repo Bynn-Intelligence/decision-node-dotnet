@@ -4,21 +4,23 @@ All notable changes to this library are documented here. The format follows [Kee
 
 ## [0.2.0] - Unreleased
 
-Implements version 1.2 of the DecisionNode SDK specification (`SpecVersion` is `"1.2"`): sixteen images a request and videos sent as frames.
+Implements version 1.2 of the DecisionNode SDK specification (`SpecVersion` is `"1.2"`): sixteen images a request, videos sent as frames, and point and box questions.
 
 ### Added
 
-- Videos as frames: `Video.Of(id, frames, fps, start, end)` and `Frame.FromBytes(t, data, mediaType)` or `Frame.FromBase64(t, text, mediaType)`, or either in the API's wire form with `Video.FromJson` and `Frame.FromJson`. Sent as the request's `videos` field, frames inline as base64 (never uploaded, cached, resized or counted toward the inline threshold), `fps`, `start` and `end` left out when not given. Video is available when the API enables it; only frames are sent, never a video file, a URL or sound.
+- Videos as frames: `Video.Of(id, frames, fps, start, end)` and `VideoFrame.FromBytes(t, data, mediaType)` or `VideoFrame.FromBase64(t, text, mediaType)`, or either in the API's wire form with `Video.FromJson` and `VideoFrame.FromJson`. Sent as the request's `videos` field, frames inline as base64 (never uploaded, cached, resized or counted toward the inline threshold), `fps`, `start` and `end` left out when not given. Only frames are sent, never a video file, a URL or sound.
 - `videos` on `DecideAsync`, `SystemoneAsync`, `CheckAsync`, `ClassifyAsync`, `ScoreAsync`, `NumberAsync`, `GateAsync`, `DecideRequest` (so `DecideManyAsync` and `CheckRequest`) and `BatchRequest`. Sessions take no videos.
 - Local video checks before anything is sent, each a `BadRequestError` with `api_usage_error` and the API's message: at most 4 videos, an id that is a non-empty string and unique across images and videos, at least one frame, frame times that are numbers of at least 0 and increase, a frame media type of JPEG, PNG or WebP (detected from the bytes when not given), `fps` above 0 and at most 4, `start` and `end` of at least 0, and `end` after `start`. Frame counts, frame bytes and the token budget are left to the server.
 - `Usage.VideoFrames` and `Usage.VideoSeconds` (`null` for a request without videos) and `Decision.Warnings` (the server's notes as sent, empty when there are none), in batch results too.
+- Point and box questions: `Question.Point(instructions, image, units)` and `Question.Box(instructions, image, units)`, `image` and `units` left out when not given. `PointAnswer` (`X`, `Y`, `Present`, `Confidence`, `Image`, `Width`, `Height`) and `BoxAnswer` (`X1`, `Y1`, `X2`, `Y2`, `Present`, `Confidence`, `Image`, `Width`, `Height`), numbers as received; an answer with a missing or wrongly typed field is an `UnknownAnswer`. `Answer.AsPoint`, `AsBox`, `Decision.Point` and `Decision.Box`. They go with `DecideAsync`, `DecideManyAsync`, batch lines and `CheckRequest`; `SystemoneAsync` refuses them locally as an unknown type.
+- Local point and box checks, raised as the API's `ValidationError` with every fault of the request in one list: a request without an image (`image_required`), no `image` in a request with two or more images (`missing`), an `image` that is not a string (`string_type`) or not the id of one of the request's images (`unknown_image`), and `units` other than `pixels` and `normalized` (`literal_error`). Missing instructions are the API's `BadRequestError` `Point question must have instructions: <id>`. A session's open leaves the image rules to its frames.
 
 ### Changed
 
-- Up to 16 images a request (4 before). The 17th is refused locally with `BadRequestError` (`api_usage_error`), message `Too many images: 17, the limit is 16.`; a lower limit held from `ModelsAsync` applies instead, with the same message.
+- Up to 16 images a request (4 before). The 17th is refused locally with `BadRequestError` (`api_usage_error`), message `Too many images: 17, the limit is 16.`; a lower limit held from `ModelsAsync` (the entry's `max_images`, else its `images.max_images`) applies instead, with the same message.
 - One `POST /v1/uploads` takes up to 16 files; `UploadAsync` splits a longer list into presigns of 16.
 - `videos` sits beside `images` in the helpers' parameter lists, before `model`; callers that pass `model` by position pass it by name.
-- CI runs conformance suite 1.7.
+- CI runs conformance suite 1.8.
 
 ## [0.1.0] - Unreleased
 

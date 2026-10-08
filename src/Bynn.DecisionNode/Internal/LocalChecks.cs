@@ -41,20 +41,23 @@ internal static class LocalChecks
     internal const string Decide = "decide";
     internal const string SystemOne = "systemone";
 
-    private static readonly string[] DecideTypes = { "truth", "noul", "choice", "score", "number" };
+    private static readonly string[] DecideTypes = { "truth", "noul", "choice", "score", "number", "point", "box" };
+    private static readonly string[] Units = { "pixels", "normalized" };
     private static readonly string[] SystemOneTypes = { "noul", "choice", "score" };
     private static readonly string[] MediaTypes = { ImageHeader.Jpeg, ImageHeader.Png, ImageHeader.WebP };
 
     // ------------------------------------------------------------------ requests
 
     /// <summary>
-    /// A decide body (<c>model</c>, <c>state</c>, <c>questions</c>) with
-    /// <paramref name="imageCount"/> images beside it, on <paramref name="profile"/>.
+    /// A decide body (<c>model</c>, <c>state</c>, <c>questions</c>) with the images of
+    /// <paramref name="imageIds"/> beside it, on <paramref name="profile"/>. The ids are what a
+    /// point or box question may name; <c>null</c> where the request carries no images of its
+    /// own (a session's open, whose images come with its frames), so those rules are skipped.
     /// </summary>
-    internal static void Request(JsonObject body, int imageCount, string profile, JsonObject? held, List<JsonNode?>? entriesBefore = null)
+    internal static void Request(JsonObject body, IReadOnlyList<string>? imageIds, string profile, JsonObject? held, List<JsonNode?>? entriesBefore = null)
     {
         // The images sit at body.images[i], three levels deep, whatever their form.
-        Nesting(Math.Max(Depth(body), imageCount > 0 ? 3 : 0));
+        Nesting(Math.Max(Depth(body), imageIds is { Count: > 0 } ? 3 : 0));
         var entries = entriesBefore ?? new List<JsonNode?>();
         var deferred = new List<DecisionNodeError>();
         if (body.TryGetPropertyValue("state", out var state) && state is not null && !IsStringObjectOrArray(state))
@@ -65,7 +68,7 @@ internal static class LocalChecks
         {
             foreach (var (id, q) in questions)
             {
-                Question(id, q, entries, deferred, profile, held);
+                Question(id, q, entries, deferred, profile, held, imageIds);
             }
         }
         if (entries.Count > 0)
@@ -78,7 +81,7 @@ internal static class LocalChecks
         }
     }
 
-    private static void Question(string id, JsonNode? node, List<JsonNode?> entries, List<DecisionNodeError> deferred, string profile, JsonObject? held)
+    private static void Question(string id, JsonNode? node, List<JsonNode?> entries, List<DecisionNodeError> deferred, string profile, JsonObject? held, IReadOnlyList<string>? imageIds)
     {
         var at = new JsonArray("body", "questions", id);
         if (node is not JsonObject q)
@@ -143,6 +146,9 @@ internal static class LocalChecks
                     }
                 }
                 break;
+            case "point" or "box":
+                Place(id, q, type, loc, entries, deferred, imageIds);
+                break;
             case "score":
                 var mostLevels = (int?)JsonValues.AsLong(held?["max_score_levels"]) ?? MaxScoreLevels;
                 if (criteria is null)
@@ -202,6 +208,46 @@ internal static class LocalChecks
                     deferred.Add(BadRequest($"{name} question must have criteria or instructions: {id}", null, null));
                 }
                 break;
+        }
+    }
+
+    /// <summary>
+    /// A point or box question: its <c>422</c> entries (the image, then the units), then
+    /// missing instructions as the API's plain-string <c>400</c>.
+    /// </summary>
+    private static void Place(string id, JsonObject q, string type, JsonArray loc, List<JsonNode?> entries, List<DecisionNodeError> deferred, IReadOnlyList<string>? imageIds)
+    {
+        if (imageIds is not null)
+        {
+            var image = q["image"];
+            if (imageIds.Count == 0)
+            {
+                entries.Add(Entry("image_required", loc, $"A {type} question needs an image in the request", q));
+            }
+            else if (image is null)
+            {
+                if (imageIds.Count >= 2)
+                {
+                    entries.Add(Entry("missing", Loc(loc, "image"), "Field required", q));
+                }
+            }
+            else if (JsonValues.AsString(image) is not { } name)
+            {
+                entries.Add(Entry("string_type", Loc(loc, "image"), "Input should be a valid string", image));
+            }
+            else if (!imageIds.Contains(name))
+            {
+                entries.Add(Entry("unknown_image", Loc(loc, "image"), "Input should be the id of an image of the request", image));
+            }
+        }
+        if (q["units"] is { } units && (JsonValues.AsString(units) is not { } unit || Array.IndexOf(Units, unit) < 0))
+        {
+            entries.Add(Entry("literal_error", Loc(loc, "units"), "Input should be 'pixels' or 'normalized'", units, new JsonObject { ["expected"] = "'pixels' or 'normalized'" }));
+        }
+        if (q["instructions"] is null)
+        {
+            var name = type == "point" ? "Point" : "Box";
+            deferred.Add(BadRequest($"{name} question must have instructions: {id}", null, null));
         }
     }
 
@@ -412,7 +458,7 @@ internal static class LocalChecks
     /// <summary>The request's images: the count, the ids, URLs, upload references and local bytes.</summary>
     internal static void Images(IReadOnlyList<Image> images, JsonObject? held)
     {
-        var most = (int?)(JsonValues.AsLong((held?["images"] as JsonObject)?["max_images"]) ?? JsonValues.AsLong(held?["max_images"])) ?? MaxImages;
+        var most = (int?)(JsonValues.AsLong(held?["max_images"]) ?? JsonValues.AsLong((held?["images"] as JsonObject)?["max_images"])) ?? MaxImages;
         if (images.Count > most)
         {
             throw BadRequest($"Too many images: {images.Count}, the limit is {most}.", "api_usage_error", null);
@@ -760,7 +806,7 @@ internal static class LocalChecks
                 entries.Add(Entry("less_than_equal", new JsonArray("body", name), $"Input should be less than or equal to {high}", sent, new JsonObject { ["le"] = high }));
             }
         }
-        Request(new JsonObject { ["questions"] = body["questions"]?.DeepClone() }, 0, Decide, held, entries);
+        Request(new JsonObject { ["questions"] = body["questions"]?.DeepClone() }, null, Decide, held, entries);
         if (sessions?["enabled"] is JsonValue enabled && enabled.GetValueKind() == JsonValueKind.False)
         {
             throw BadRequest($"Model {JsonValues.AsString(held!["name"])} does not serve sessions.", "api_usage_error", null);

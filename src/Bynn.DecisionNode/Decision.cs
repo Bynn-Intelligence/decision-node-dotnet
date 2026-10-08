@@ -93,6 +93,12 @@ public sealed class Decision
 
     /// <summary>The answer with this id as a <see cref="NumberAnswer"/>.</summary>
     public NumberAnswer Number(string id) => this[id].AsNumber();
+
+    /// <summary>The answer with this id as a <see cref="PointAnswer"/>.</summary>
+    public PointAnswer Point(string id) => this[id].AsPoint();
+
+    /// <summary>The answer with this id as a <see cref="BoxAnswer"/>.</summary>
+    public BoxAnswer Box(string id) => this[id].AsBox();
 }
 
 /// <summary>Token counts of a decision, and what was read of its videos.</summary>
