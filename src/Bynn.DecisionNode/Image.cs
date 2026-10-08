@@ -1,120 +1,297 @@
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Bynn.DecisionNode.Internal;
 
 namespace Bynn.DecisionNode;
 
 /// <summary>
-/// An image sent beside the state. Every question in the request can see it, and
-/// text in the state or the instructions can refer to it by its <see cref="Id"/>.
+/// An image sent beside the state. Every question in the request can see it, and text in
+/// the state or the instructions can refer to it by its <see cref="Id"/>.
 /// </summary>
 /// <remarks>
-/// The limits are the API's (at the time of writing: 4 images a request, 10 MB each,
-/// <c>https</c> URLs only) and the server enforces them.
+/// <para>
+/// Send an image by URL when you can (<see cref="FromUrl"/>): nothing is uploaded, the
+/// request stays small, and the server fetches the image while it reads the request.
+/// </para>
+/// <para>
+/// Local bytes (a file, a byte array, a stream or base64 text) are checked on this machine
+/// before any request: JPEG, PNG or WebP by their first bytes, at most 10 MB each, at most
+/// 40 megapixels read from the image header, and at most 4 images in a request. A request
+/// whose local images total under the client's inline threshold
+/// (<see cref="DecisionNodeClient.DefaultInlineThreshold"/>, 512 KiB) carries them inline as
+/// base64; at or above it they are uploaded once with <c>POST /v1/uploads</c> and named by
+/// <c>upload_id</c>, and an image the client uploaded before is named by its
+/// <c>upload_id</c> whatever its size. No image is resized or re-encoded.
+/// </para>
+/// <para>An <see cref="Image"/> is immutable and can be reused across requests and threads.</para>
 /// </remarks>
 public sealed class Image
 {
-    private Image(string id, byte[]? data, string? mediaType, string? url)
+    private byte[]? _sha256;
+    private string? _fault;
+    private bool _checked;
+
+    private Image(string id, ReadOnlyMemory<byte>? data, string? declaredMediaType, string? url, string? uploadId)
     {
         Id = id;
         Data = data;
-        MediaType = mediaType;
+        DeclaredMediaType = string.IsNullOrEmpty(declaredMediaType) ? null : declaredMediaType;
         Url = url;
+        UploadId = uploadId;
+        if (data is { } bytes)
+        {
+            DetectedMediaType = ImageHeader.Sniff(bytes.Span);
+        }
     }
 
     /// <summary>The image's id, unique within a request.</summary>
     public string Id { get; }
 
-    /// <summary>The image bytes, or <c>null</c> for an image given by URL.</summary>
-    public byte[]? Data { get; }
+    /// <summary>The image bytes, or <c>null</c> for an image given by URL or by upload id.</summary>
+    public ReadOnlyMemory<byte>? Data { get; }
 
-    /// <summary><c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>, or <c>null</c> for an image given by URL.</summary>
-    public string? MediaType { get; }
+    /// <summary>
+    /// <c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>: the type given when the image
+    /// was made, else the type detected from the bytes. <c>null</c> for a URL, and for bytes
+    /// of no known format (the request is then refused before it is sent).
+    /// </summary>
+    public string? MediaType => DeclaredMediaType ?? DetectedMediaType;
 
-    /// <summary>The image's URL, or <c>null</c> for an image sent as bytes.</summary>
+    /// <summary>The image's URL, or <c>null</c> for an image sent as bytes or by upload id.</summary>
     public string? Url { get; }
+
+    /// <summary>The upload this image names, for an image made with <see cref="FromUploadId"/>.</summary>
+    public string? UploadId { get; }
+
+    internal string? DeclaredMediaType { get; }
+
+    internal string? DetectedMediaType { get; }
+
+    internal bool IsLocal => Data is not null;
+
+    /// <summary>
+    /// An image the server fetches from an <c>https</c> URL of at most 2,048 characters. The
+    /// recommended form: nothing is uploaded and the URL is never fetched by this library.
+    /// </summary>
+    public static Image FromUrl(string id, string url)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(url);
+        return new Image(id, null, null, url, null);
+    }
 
     /// <summary>
     /// Reads a JPEG, PNG or WebP file now, when the image is made. The media type is taken
     /// from the file's first bytes.
     /// </summary>
-    /// <exception cref="ArgumentException">The file cannot be read or is not a JPEG, PNG or WebP image.</exception>
+    /// <exception cref="ArgumentException">The file cannot be read.</exception>
     public static Image FromFile(string id, string path)
     {
         ArgumentNullException.ThrowIfNull(id);
         ArgumentNullException.ThrowIfNull(path);
-        byte[] data;
         try
         {
-            data = File.ReadAllBytes(path);
+            return new Image(id, File.ReadAllBytes(path), null, null, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             throw new ArgumentException($"image '{id}': cannot read {path}: {ex.Message}", nameof(path), ex);
         }
-        var mediaType = SniffMediaType(data)
-            ?? throw new ArgumentException($"image '{id}': {path} is not a JPEG, PNG or WebP file", nameof(path));
-        return new Image(id, data, mediaType, null);
+    }
+
+    /// <summary>Reads a JPEG, PNG or WebP file now, without blocking a thread.</summary>
+    /// <exception cref="ArgumentException">The file cannot be read.</exception>
+    public static async Task<Image> FromFileAsync(string id, string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(path);
+        try
+        {
+            return new Image(id, await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false), null, null, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            throw new ArgumentException($"image '{id}': cannot read {path}: {ex.Message}", nameof(path), ex);
+        }
     }
 
     /// <summary>
-    /// An image from its bytes. Without <paramref name="mediaType"/> (or with an empty one)
-    /// the media type is detected from the first bytes, as for a file.
+    /// An image from its bytes, which are not copied: do not change them while the image is
+    /// in use. Without <paramref name="mediaType"/> (or with an empty one) the media type is
+    /// detected from the first bytes; a given one must match them.
     /// </summary>
     /// <param name="id">The image's id, unique within a request.</param>
     /// <param name="data">The image bytes.</param>
     /// <param name="mediaType"><c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>; detected when <c>null</c> or empty.</param>
-    /// <exception cref="ArgumentException">No media type was given and the bytes are not a JPEG, PNG or WebP image.</exception>
     public static Image FromBytes(string id, byte[] data, string? mediaType = null)
     {
         ArgumentNullException.ThrowIfNull(id);
         ArgumentNullException.ThrowIfNull(data);
-        if (string.IsNullOrEmpty(mediaType))
-        {
-            mediaType = SniffMediaType(data)
-                ?? throw new ArgumentException($"image '{id}': the bytes are not a JPEG, PNG or WebP image; pass the media type", nameof(data));
-        }
-        return new Image(id, data, mediaType, null);
+        return new Image(id, data, mediaType, null, null);
     }
 
-    /// <summary>An image the server fetches from an <c>https</c> URL.</summary>
-    public static Image FromUrl(string id, string url)
+    /// <summary>An image from bytes in memory, which are not copied. As <see cref="FromBytes(string, byte[], string?)"/>.</summary>
+    public static Image FromBytes(string id, ReadOnlyMemory<byte> data, string? mediaType = null)
     {
         ArgumentNullException.ThrowIfNull(id);
-        ArgumentNullException.ThrowIfNull(url);
-        return new Image(id, null, null, url);
+        return new Image(id, data, mediaType, null, null);
+    }
+
+    /// <summary>
+    /// An image from base64 text (standard alphabet). A <c>data:</c> URL prefix such as
+    /// <c>data:image/png;base64,</c> is accepted and skipped.
+    /// </summary>
+    /// <exception cref="ArgumentException">The text is not base64.</exception>
+    public static Image FromBase64(string id, string base64, string? mediaType = null)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(base64);
+        var text = base64.AsSpan().Trim();
+        if (text.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            var comma = text.IndexOf(',');
+            text = comma < 0 ? ReadOnlySpan<char>.Empty : text[(comma + 1)..];
+        }
+        var buffer = new byte[(text.Length * 3 / 4) + 3];
+        if (!Convert.TryFromBase64Chars(text, buffer, out var written))
+        {
+            throw new ArgumentException($"image '{id}': the text is not base64", nameof(base64));
+        }
+        return new Image(id, buffer.AsMemory(0, written), mediaType, null, null);
+    }
+
+    /// <summary>Reads an image from a stream now, to its end. The stream is not disposed.</summary>
+    /// <exception cref="ArgumentException">The stream cannot be read.</exception>
+    public static Image FromStream(string id, Stream stream, string? mediaType = null)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(stream);
+        try
+        {
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            return new Image(id, buffer.GetBuffer().AsMemory(0, (int)buffer.Length), mediaType, null, null);
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or ObjectDisposedException)
+        {
+            throw new ArgumentException($"image '{id}': cannot read the stream: {ex.Message}", nameof(stream), ex);
+        }
+    }
+
+    /// <summary>Reads an image from a stream now, to its end, without blocking a thread. The stream is not disposed.</summary>
+    /// <exception cref="ArgumentException">The stream cannot be read.</exception>
+    public static async Task<Image> FromStreamAsync(string id, Stream stream, string? mediaType = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(stream);
+        try
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+            return new Image(id, buffer.GetBuffer().AsMemory(0, (int)buffer.Length), mediaType, null, null);
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or ObjectDisposedException)
+        {
+            throw new ArgumentException($"image '{id}': cannot read the stream: {ex.Message}", nameof(stream), ex);
+        }
+    }
+
+    /// <summary>
+    /// An image uploaded before, by its <c>upload_id</c> (from <see cref="DecisionNodeClient.UploadAsync"/>),
+    /// sent as given. <paramref name="mediaType"/>, when given, must equal the type declared at upload.
+    /// </summary>
+    public static Image FromUploadId(string id, string uploadId, string? mediaType = null)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(uploadId);
+        return new Image(id, null, mediaType, null, uploadId);
     }
 
     /// <summary>The media type of JPEG, PNG or WebP bytes, or <c>null</c> for anything else.</summary>
-    public static string? SniffMediaType(ReadOnlySpan<byte> data)
-    {
-        if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
-        {
-            return "image/jpeg";
-        }
-        if (data.Length >= 8 && data[..8].SequenceEqual(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }))
-        {
-            return "image/png";
-        }
-        if (data.Length >= 12
-            && data[..4].SequenceEqual("RIFF"u8)
-            && data[8..12].SequenceEqual("WEBP"u8))
-        {
-            return "image/webp";
-        }
-        return null;
-    }
+    public static string? SniffMediaType(ReadOnlySpan<byte> data) => ImageHeader.Sniff(data);
 
-    /// <summary>The image's wire form.</summary>
+    /// <summary>
+    /// The image's wire form as sent inline: <c>{id, url}</c>, <c>{id, upload_id}</c> or
+    /// <c>{id, media_type, data}</c>. A request may send local bytes by <c>upload_id</c> instead.
+    /// </summary>
     public JsonObject ToJson()
     {
         if (Url is not null)
         {
             return new JsonObject { ["id"] = Id, ["url"] = Url };
         }
+        if (UploadId is not null)
+        {
+            var o = new JsonObject { ["id"] = Id, ["upload_id"] = UploadId };
+            if (DeclaredMediaType is not null)
+            {
+                o["media_type"] = DeclaredMediaType;
+            }
+            return o;
+        }
         return new JsonObject
         {
             ["id"] = Id,
             ["media_type"] = MediaType,
-            ["data"] = Convert.ToBase64String(Data!),
+            ["data"] = Convert.ToBase64String(Data!.Value.Span),
         };
+    }
+
+    /// <summary>The SHA-256 of the bytes, computed once.</summary>
+    internal byte[] Sha256 => _sha256 ??= SHA256.HashData(Data!.Value.Span);
+
+    /// <summary>The upload cache's key: the bytes' SHA-256 and the media type.</summary>
+    internal string CacheKey => Convert.ToBase64String(Sha256) + "|" + MediaType;
+
+    /// <summary>
+    /// What is wrong with the image by the API's fixed rules, or <c>null</c>. Checked once:
+    /// the image is immutable.
+    /// </summary>
+    internal string? Fault()
+    {
+        if (!_checked)
+        {
+            _fault = FindFault();
+            _checked = true;
+        }
+        return _fault;
+    }
+
+    private string? FindFault()
+    {
+        if (Url is not null)
+        {
+            var ok = Url.Length <= LocalChecks.MaxUrlChars
+                && Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                && Uri.TryCreate(Url, UriKind.Absolute, out var uri)
+                && uri.Scheme == Uri.UriSchemeHttps
+                && uri.Host.Length > 0;
+            return ok ? null : $"Image '{Id}': only https URLs of at most {LocalChecks.MaxUrlChars} characters are accepted.";
+        }
+        if (Data is not { } data)
+        {
+            return null;
+        }
+        if (DetectedMediaType is null)
+        {
+            return $"Image '{Id}' is not a JPEG, PNG or WebP image.";
+        }
+        if (DeclaredMediaType is not null && DeclaredMediaType != DetectedMediaType)
+        {
+            return $"Image '{Id}' could not be decoded as {DeclaredMediaType}.";
+        }
+        if (data.Length > LocalChecks.MaxImageBytes)
+        {
+            return $"Image '{Id}' is larger than 10 MB.";
+        }
+        if (ImageHeader.Dimensions(data.Span, DetectedMediaType) is not { } size)
+        {
+            return $"Image '{Id}': its header cannot be read.";
+        }
+        if ((long)size.Width * size.Height > LocalChecks.MaxImagePixels)
+        {
+            return $"Image '{Id}' is {size.Width}x{size.Height} pixels, over 40 megapixels.";
+        }
+        return null;
     }
 }

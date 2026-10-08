@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
+using Bynn.DecisionNode.Internal;
 
 namespace Bynn.DecisionNode;
 
@@ -9,12 +11,13 @@ namespace Bynn.DecisionNode;
 /// </summary>
 public sealed class Safety
 {
-    private Safety(bool isChecked, IReadOnlyDictionary<string, double?> scores, IReadOnlyList<string> flagged, string? reason)
+    private Safety(bool isChecked, IReadOnlyDictionary<string, double?> scores, IReadOnlyList<string> flagged, string? reason, string? blocked = null)
     {
         Checked = isChecked;
         Scores = scores;
         Flagged = flagged;
         Reason = reason;
+        Blocked = blocked;
     }
 
     /// <summary>Whether the check ran.</summary>
@@ -34,6 +37,43 @@ public sealed class Safety
 
     /// <summary>Why the check did not run, when <see cref="Checked"/> is false.</summary>
     public string? Reason { get; }
+
+    /// <summary>The category a session frame was refused for, from the body form's <c>blocked</c> field.</summary>
+    public string? Blocked { get; }
+
+    /// <summary>
+    /// Reads the body form of a session reply or frame error:
+    /// <c>{"checked": true, "harm": 0.0021, "self_harm": 0.0008, "flagged": []}</c>, with
+    /// <c>blocked</c> on a refused frame. Returns <c>null</c> when <paramref name="body"/> is not an object.
+    /// </summary>
+    public static Safety? FromJson(JsonNode? body)
+    {
+        if (body is not JsonObject o)
+        {
+            return null;
+        }
+        var isChecked = o["checked"] is JsonValue c && c.TryGetValue(out bool b) ? b : true;
+        var scores = new Dictionary<string, double?>();
+        var flagged = new List<string>();
+        foreach (var (key, value) in o)
+        {
+            switch (key)
+            {
+                case "checked" or "reason" or "blocked":
+                    break;
+                case "flagged":
+                    if (value is JsonArray list)
+                    {
+                        flagged.AddRange(list.Select(JsonValues.AsString).OfType<string>());
+                    }
+                    break;
+                default:
+                    scores[key] = JsonValues.TryDouble(value, out var d) ? d : null;
+                    break;
+            }
+        }
+        return new Safety(isChecked, scores, flagged, JsonValues.AsString(o["reason"]), JsonValues.AsString(o["blocked"]));
+    }
 
     /// <summary>
     /// Parses the header: <c>harm=0.031, self_harm=0.004</c>, with an optional

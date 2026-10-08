@@ -26,7 +26,18 @@ public sealed class DecisionNodeClientOptions
     /// <summary>Retries after the first attempt. 0 or more; default 2.</summary>
     public int? MaxRetries { get; set; }
 
-    /// <summary>Headers added to every request, for example <c>x-decisionnode-safety-body: true</c>.</summary>
+    /// <summary>
+    /// Local image bytes in one request (or one session frame, or one batch line) that
+    /// together total under this many bytes go inline as base64; at or above it they are
+    /// uploaded once and sent by <c>upload_id</c>. 0 or more; default
+    /// <see cref="DecisionNodeClient.DefaultInlineThreshold"/> (524,288). 0 uploads every local image.
+    /// </summary>
+    public int? InlineThreshold { get; set; }
+
+    /// <summary>
+    /// Headers added to every API request and to a session's WebSocket handshake, for example
+    /// <c>x-decisionnode-safety-body: true</c>. Never sent to an image storage URL.
+    /// </summary>
     public IDictionary<string, string>? Headers { get; set; }
 
     /// <summary>

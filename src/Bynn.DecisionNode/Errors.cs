@@ -119,7 +119,7 @@ public class ValidationError : DecisionNodeError
     public JsonArray? Entries { get; }
 }
 
-/// <summary>429: too many requests. Retried by default.</summary>
+/// <summary>429: too many requests. Retried by default (except <see cref="SessionLimitError"/>).</summary>
 public class RateLimitError : DecisionNodeError
 {
     internal RateLimitError(ErrorDetails d, TimeSpan? retryAfter)
@@ -130,6 +130,20 @@ public class RateLimitError : DecisionNodeError
 
     /// <summary>How long the server asked to wait, from <c>retry-after-ms</c> or <c>Retry-After</c>; at most 60 seconds.</summary>
     public TimeSpan? RetryAfter { get; }
+}
+
+/// <summary>
+/// 429 with <c>error_type</c> <c>session_limit_exceeded</c>: the key already holds as many
+/// open sessions as it may (<c>sessions.max_per_key</c> of <c>GET /v1/models</c>). Never
+/// retried: end a session first. A <see cref="RateLimitError"/>, so code that handles rate
+/// limits handles it too.
+/// </summary>
+public class SessionLimitError : RateLimitError
+{
+    internal SessionLimitError(ErrorDetails d, TimeSpan? retryAfter)
+        : base(d, retryAfter)
+    {
+    }
 }
 
 /// <summary>529: the service is overloaded. Retried by default.</summary>

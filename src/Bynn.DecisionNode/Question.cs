@@ -6,8 +6,8 @@ namespace Bynn.DecisionNode;
 
 /// <summary>
 /// One question in a decision, held in its wire form. Build it with
-/// <see cref="Truth"/>, <see cref="Choice(object?, IEnumerable{string})"/> or
-/// <see cref="Score"/>, or pass the wire form itself (a <see cref="JsonObject"/>
+/// <see cref="Truth"/>, <see cref="Choice(object?, IEnumerable{string})"/>,
+/// <see cref="Score"/> or <see cref="Number"/>, or pass the wire form itself (a <see cref="JsonObject"/>
 /// converts implicitly), so a request copied from the documentation runs unchanged.
 /// </summary>
 /// <example>
@@ -34,7 +34,7 @@ public sealed class Question
         _wire = wire;
     }
 
-    /// <summary>The question type as sent: <c>truth</c>, <c>choice</c>, <c>score</c>, or whatever a wire form names.</summary>
+    /// <summary>The question type as sent: <c>truth</c>, <c>choice</c>, <c>score</c>, <c>number</c>, or whatever a wire form names.</summary>
     public string? Type => JsonValues.AsString(_wire["type"]);
 
     /// <summary>A copy of the wire form of this question.</summary>
@@ -144,6 +144,51 @@ public sealed class Question
         }
         q["criteria"] = criteria;
         return new Question(q);
+    }
+
+    /// <summary>
+    /// A number on a grid from <paramref name="min"/> to <paramref name="max"/> in steps of
+    /// <paramref name="step"/>, answered as the most likely value with a probability per value.
+    /// An argument left out is left out of the wire form, so the server's defaults apply
+    /// (0, 255 and 1). A grid holds at most 4,096 values.
+    /// </summary>
+    /// <param name="instructions">What to count or read. Required by the API.</param>
+    /// <param name="min">The lowest value, at most 6 decimals.</param>
+    /// <param name="max">The highest value the grid may reach; it need not be on the grid.</param>
+    /// <param name="step">The spacing, above 0, at most 6 decimals.</param>
+    /// <remarks>Each value is written in its shortest form: <c>5</c>, <c>0.5</c>, <c>-2.5</c>.</remarks>
+    public static Question Number(object? instructions, double? min = null, double? max = null, double? step = null)
+    {
+        var q = new JsonObject { ["type"] = "number" };
+        if (instructions is not null)
+        {
+            q["instructions"] = JsonValues.ToNode(instructions, "instructions");
+        }
+        if (min is { } lo)
+        {
+            q["min"] = NumberNode(lo, nameof(min));
+        }
+        if (max is { } hi)
+        {
+            q["max"] = NumberNode(hi, nameof(max));
+        }
+        if (step is { } st)
+        {
+            q["step"] = NumberNode(st, nameof(step));
+        }
+        return new Question(q);
+    }
+
+    private static JsonNode NumberNode(double value, string name)
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new ArgumentOutOfRangeException(name, value, "a number question's bounds and step must be finite");
+        }
+        // Whole values are written as integers (5, not 5.0); others in their shortest form.
+        return value == Math.Floor(value) && Math.Abs(value) <= 9007199254740992d
+            ? JsonValue.Create((long)value)
+            : JsonValue.Create(value);
     }
 
     /// <summary>A question from its wire form, sent exactly as given.</summary>

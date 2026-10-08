@@ -73,6 +73,9 @@ public sealed class Decision
 
     /// <summary>The answer with this id as a <see cref="ScoreAnswer"/>.</summary>
     public ScoreAnswer Score(string id) => this[id].AsScore();
+
+    /// <summary>The answer with this id as a <see cref="NumberAnswer"/>.</summary>
+    public NumberAnswer Number(string id) => this[id].AsNumber();
 }
 
 /// <summary>Token counts of a decision.</summary>
@@ -110,6 +113,43 @@ public sealed class ModelInfo
 
     /// <summary>Every other field of the entry: the model's published limits.</summary>
     public IReadOnlyDictionary<string, JsonNode?> Limits { get; }
+
+    /// <summary>The token limit of state plus questions (<c>context_tokens</c>).</summary>
+    public long? ContextTokens => Long("context_tokens");
+
+    /// <summary>Images per request (<c>max_images</c>).</summary>
+    public long? MaxImages => Long("max_images");
+
+    /// <summary>The largest image or upload in bytes (<c>upload_max_bytes</c>).</summary>
+    public long? UploadMaxBytes => Long("upload_max_bytes");
+
+    /// <summary>How long an upload can be named, in seconds (<c>upload_ttl_seconds</c>).</summary>
+    public long? UploadTtlSeconds => Long("upload_ttl_seconds");
+
+    /// <summary>The media types an upload takes (<c>upload_media_types</c>).</summary>
+    public IReadOnlyList<string>? UploadMediaTypes =>
+        (Raw["upload_media_types"] as JsonArray)?.Select(JsonValues.AsString).OfType<string>().ToList();
+
+    /// <summary>Grid values answered as one question (<c>number_one_question_values</c>).</summary>
+    public long? NumberOneQuestionValues => Long("number_one_question_values");
+
+    /// <summary>The most values a number grid may hold (<c>number_max_grid_values</c>).</summary>
+    public long? NumberMaxGridValues => Long("number_max_grid_values");
+
+    /// <summary><c>min</c> and <c>max</c> of a number question that leaves them out (<c>number_default_range</c>).</summary>
+    public IReadOnlyList<double>? NumberDefaultRange =>
+        (Raw["number_default_range"] as JsonArray)?.Select(n => JsonValues.TryDouble(n, out var d) ? d : (double?)null).OfType<double>().ToList();
+
+    /// <summary><c>step</c> of a number question that leaves it out (<c>number_default_step</c>).</summary>
+    public double? NumberDefaultStep => JsonValues.TryDouble(Raw["number_default_step"], out var d) ? d : null;
+
+    /// <summary>The model's session limits (<c>sessions</c>: <c>max_per_key</c>, <c>max_window</c>, <c>max_frame_tokens</c> and the rest).</summary>
+    public JsonObject? Sessions => Raw["sessions"] as JsonObject;
+
+    /// <summary>The model's Batch API limits (<c>batch</c>: <c>requests_per_batch</c>, <c>add_bytes</c>, <c>price_factor</c> and the rest).</summary>
+    public JsonObject? Batch => Raw["batch"] as JsonObject;
+
+    private long? Long(string field) => JsonValues.AsLong(Raw[field]);
 
     /// <summary>The entry exactly as received.</summary>
     public JsonObject Raw { get; }

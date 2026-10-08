@@ -6,8 +6,8 @@ using Bynn.DecisionNode.Internal;
 namespace Bynn.DecisionNode;
 
 /// <summary>
-/// One answer of a decision: a <see cref="TruthAnswer"/>, <see cref="ChoiceAnswer"/> or
-/// <see cref="ScoreAnswer"/>. An answer of a type this version of the library does not
+/// One answer of a decision: a <see cref="TruthAnswer"/>, <see cref="ChoiceAnswer"/>,
+/// <see cref="ScoreAnswer"/> or <see cref="NumberAnswer"/>. An answer of a type this version of the library does not
 /// know, or of a known type with missing or wrongly typed fields, is an
 /// <see cref="UnknownAnswer"/> holding its raw fields, so a new question type on the
 /// server does not break an older client.
@@ -20,7 +20,7 @@ public abstract class Answer
         Type = JsonValues.AsString(raw["type"]);
     }
 
-    /// <summary>The answer type as sent: <c>truth</c>, <c>choice</c>, <c>score</c> or a newer one.</summary>
+    /// <summary>The answer type as sent: <c>truth</c>, <c>choice</c>, <c>score</c>, <c>number</c> or a newer one.</summary>
     public string? Type { get; }
 
     /// <summary>The answer's fields exactly as received.</summary>
@@ -38,6 +38,10 @@ public abstract class Answer
     /// <exception cref="InvalidCastException">The answer is of another type.</exception>
     public ScoreAnswer AsScore() => As<ScoreAnswer>();
 
+    /// <summary>This answer as a <see cref="NumberAnswer"/>.</summary>
+    /// <exception cref="InvalidCastException">The answer is of another type.</exception>
+    public NumberAnswer AsNumber() => As<NumberAnswer>();
+
     private T As<T>() where T : Answer =>
         this as T ?? throw new InvalidCastException($"the answer is of type '{Type}', not {typeof(T).Name}");
 
@@ -52,6 +56,14 @@ public abstract class Answer
             return JsonValues.AsString(raw["type"]) switch
             {
                 "truth" => new TruthAnswer(raw, Number(raw, "truth")),
+                // The yes-or-no type under its other wire name (what /v1/systemone answers).
+                "noul" => new TruthAnswer(raw, Number(raw, "noul")),
+                "number" => new NumberAnswer(
+                    raw,
+                    Number(raw, "number"),
+                    Number(raw, "expected"),
+                    Number(raw, "confidence"),
+                    ChoiceProbabilities(raw)),
                 "choice" => new ChoiceAnswer(
                     raw,
                     JsonValues.AsString(raw["choice"]) ?? throw new MalformedAnswer(),
@@ -141,7 +153,10 @@ public sealed class UnknownAnswer : Answer
     }
 }
 
-/// <summary>The answer to a <c>truth</c> question.</summary>
+/// <summary>
+/// The answer to a <c>truth</c> question, on <c>/v1/decide</c> and on <c>/v1/systemone</c>
+/// (which writes the yes-or-no type under the wire name that path takes) alike.
+/// </summary>
 public sealed class TruthAnswer : Answer
 {
     internal TruthAnswer(JsonObject raw, double truth)
@@ -203,4 +218,32 @@ public sealed class ScoreAnswer : Answer
 
     /// <summary>Each level index mapped to the level as it was sent.</summary>
     public IReadOnlyDictionary<int, JsonNode?> Legend { get; }
+}
+
+/// <summary>The answer to a <c>number</c> question.</summary>
+public sealed class NumberAnswer : Answer
+{
+    internal NumberAnswer(JsonObject raw, double number, double expected, double confidence, IReadOnlyDictionary<string, double> probabilities)
+        : base(raw)
+    {
+        Number = number;
+        Expected = expected;
+        Confidence = confidence;
+        Probabilities = probabilities;
+    }
+
+    /// <summary>The most likely value of the grid, exactly as received.</summary>
+    public double Number { get; }
+
+    /// <summary>The expected value over the whole grid, as received.</summary>
+    public double Expected { get; }
+
+    /// <summary>The probability of <see cref="Number"/>, from 0 to 1.</summary>
+    public double Confidence { get; }
+
+    /// <summary>
+    /// The probability of each listed value, keyed by the value exactly as the server wrote it
+    /// (<c>"7"</c>, <c>"3.5"</c>), in the server's order. Values at 0.001 or below are not listed.
+    /// </summary>
+    public IReadOnlyDictionary<string, double> Probabilities { get; }
 }
