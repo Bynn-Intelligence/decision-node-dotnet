@@ -137,7 +137,7 @@ var d = await dn.DecideAsync(
 
 Local bytes are checked on your machine before any request: JPEG, PNG or WebP by their first bytes (a `mediaType` you give must match them), at most 10 MB, at most 40 megapixels read from the image header without decoding it, at most 4 images in a request (URLs included), and ids unique. A request that breaks one of these rules throws `BadRequestError` with nothing sent. No image is resized or re-encoded.
 
-Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect.
+Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect. A `PUT` refused because its URL's five minutes ran out is presigned again once.
 
 Uploads are remembered by content in the client's memory (at most 256, least recently used out first) until 5 minutes before they expire, so an image you send again, in a later call, in `DecideManyAsync` or in a session frame, goes by its `upload_id` whatever its size. If the server answers that an upload the library placed has expired or was used up, the library uploads it again and sends the request once more. `UploadAsync(images)` uploads whatever the size and returns each `upload_id`, which any key of the workspace can name for an hour.
 
@@ -172,7 +172,7 @@ await foreach (var ev in session.RepliesAsync())
 | Member | Does |
 |---|---|
 | `ConnectAsync()` | Opens the WebSocket with your key in the `Authorization` header (never in the URL) and your `headers`. A refused handshake arrives as the first event, a `SessionClosed` |
-| `SendAsync(frame, image, questions, reset, seq)` | Sends one frame and returns its `seq`, counted from 1 when not given. Never waits for a reply. A frame's image follows the inline threshold; frames take no URL |
+| `SendAsync(frame, image, questions, reset, seq)` | Sends one frame and returns its `seq`, counted from 1 when not given. Never waits for a reply. A frame's image follows the inline threshold; frames take no URL. A frame that breaks a fixed rule (no frame value and no image, an empty frame, an empty or unknown question list, a `seq` out of range) throws `BadRequestError` and nothing is sent; it uses no `seq` |
 | `RepliesAsync()`, `ReadAsync()` | `Reply` and `FrameError` values in order, ending with the `SessionClosed`. A frame error is a value, never thrown. A reply that superseded frames lists their `seq` in `Dropped` |
 | `EndAsync()` | Ends the session (`DELETE`); one already ended counts as success |
 
@@ -253,7 +253,13 @@ catch (DecisionNodeError e)
 }
 ```
 
-The library checks the API's fixed rules before sending, so a request the server would refuse costs no round trip. A fault in the request's content throws the class the API answers it with, with no `Status` and no `RequestId`: `BadRequestError` for an image (see Images), a choice without options or with more than 255, a score with more than 10 levels, a truth question with neither instructions nor criteria, or a number question without instructions; `ValidationError` for a number grid with `min` above `max`, a `step` not above 0, or more than 4,096 values, and for a score without levels. Token limits stay the server's, because they differ by model and are published by `ModelsAsync()`.
+The library checks every fixed rule the API documents before sending, so a request the server would refuse costs no round trip. A fault throws exactly what the server would answer, with no `Status` and no `RequestId` (`Reason` says what went wrong):
+
+- `BadRequestError` with the API's message and no `ErrorType` for a choice without options or with more than 255, a score with more than 10 levels, a truth question with neither instructions nor criteria, and a number question without instructions.
+- `ValidationError` with the server's exact `Entries` for a question without a type or with fields of the wrong type, a state that is not a string, an object or an array, a number grid the API cannot build (`min` above `max`, a `step` not above 0, more than 6 decimals, beyond 2^53, more than 4,096 values), and a session `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600.
+- `BadRequestError` with `ErrorType` `api_usage_error` for an unknown question type (a number question on `SystemoneAsync` included), a request nested more than 128 levels deep, an image fault (see Images), a frame fault (see Sessions), a batch request without a unique `custom_id` or an empty add, and `ListAsync` paging out of range; `image_url_refused` for an image URL with user information, a port other than 443, or a literal private address.
+
+Limits only `/v1/models` states, such as whether a model answers number questions or serves sessions, its session window, `requests_per_batch` and `max_custom_id_chars`, are checked once you have called `ModelsAsync()` on the client, and left to the server otherwise. Token limits stay the server's, because they differ by model.
 
 A bad argument throws .NET's own `ArgumentException` (or its subclasses `ArgumentNullException` and `ArgumentOutOfRangeException`), never a DecisionNode error: an empty question map, a value that cannot be serialised, an unreadable image file, a base URL that is not `https`, a `timeout` that is not above zero, a negative `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a `pollInterval` below 10 seconds, an `HttpClient` that cannot be shown to refuse redirects (including one with a `DelegatingHandler` you have not declared safe), and an `HttpClient` that replaces the certificate check for an `https` base URL. A missing key is an `AuthenticationError`, also before anything is sent.
 
@@ -327,7 +333,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.4); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.5); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 
