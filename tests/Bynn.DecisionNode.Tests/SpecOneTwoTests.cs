@@ -170,6 +170,10 @@ public class SpecOneTwoTests
     [InlineData(999999.5, "1e+06")]
     [InlineData(0.0001, "0.0001")]
     [InlineData(0.00001234, "1.234e-05")]
+    [InlineData(0.00001, "1e-05")]
+    [InlineData(1e21, "1e+21")]
+    [InlineData(1e-100, "1e-100")]
+    [InlineData(2.5e7, "2.5e+07")]
     [InlineData(123456.75, "123457")]
     public void NumbersInVideoMessagesAreWrittenAsTheApiWritesThem(double value, string text)
     {
