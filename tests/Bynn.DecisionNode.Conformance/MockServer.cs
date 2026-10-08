@@ -59,7 +59,7 @@ public sealed class MockServer : IDisposable
             query += "&path=" + Uri.EscapeDataString(path);
         }
         var text = await _http.GetStringAsync($"{Url}/_mock/requests?{query}");
-        var info = (JsonObject)JsonNode.Parse(text)!;
+        var info = (JsonObject)JsonNode.Parse(text, documentOptions: Compare.Deep)!;
         // Pongs on a session's socket are counted for the pong cases, not as requests.
         var all = (JsonArray)info["requests"]!;
         info["pongs"] = all.Count(r => (string?)r!["method"] == "PONG");

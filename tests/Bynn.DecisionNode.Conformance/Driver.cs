@@ -54,7 +54,7 @@ public static class Driver
                 // A client of the caller's own, left at the .NET default: it follows redirects.
                 http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = true });
             }
-            return new DecisionNodeClient(new DecisionNodeClientOptions
+            var client = new DecisionNodeClient(new DecisionNodeClientOptions
             {
                 ApiKey = (string?)spec["api_key"],
                 BaseUrl = baseUrl,
@@ -65,6 +65,13 @@ public static class Driver
                 Headers = headers,
                 HttpClient = http,
             });
+            if ((string?)spec["clock"] == "mock")
+            {
+                // The SDK's clock reads the mock's, so the case can move the time it judges uploads by.
+                var session = extraHeaders["x-mock-session"];
+                client.UtcNow = () => MockClock(mockUrl, session);
+            }
+            return client;
         }
         finally
         {
@@ -73,6 +80,15 @@ public static class Driver
                 Environment.SetEnvironmentVariable(k, v);
             }
         }
+    }
+
+    private static readonly HttpClient ClockHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    private static DateTimeOffset MockClock(string mockUrl, string session)
+    {
+        var text = ClockHttp.GetStringAsync($"{mockUrl}/_mock/clock?session={Uri.EscapeDataString(session)}").GetAwaiter().GetResult();
+        var seconds = (double)JsonNode.Parse(text)!["epoch_seconds"]!;
+        return DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(seconds * 1000));
     }
 
     /// <summary>Runs the call. Errors are returned, not thrown, so the caller can check them.</summary>
@@ -209,6 +225,14 @@ public static class Driver
             case JsonObject o when o.Count == 1 && o.First().Key == "$text":
                 var spec = (JsonObject)o.First().Value!;
                 return JsonValue.Create(string.Concat(Enumerable.Repeat((string)spec["repeat"]!, (int)spec["times"]!)));
+            case JsonObject o when o.Count == 1 && o.First().Key == "$nest":
+                var nest = (JsonObject)o.First().Value!;
+                var inner = Plain(nest["value"], ctx);
+                for (var i = 0; i < (int)nest["depth"]!; i++)
+                {
+                    inner = new JsonArray(inner);
+                }
+                return inner;
             case JsonObject o when o.Count == 1 && o.First().Key == "$ref":
                 return Resolve((string)o.First().Value!, ctx);
             case JsonObject o:
@@ -260,7 +284,8 @@ public static class Driver
             var o = (JsonObject)r!;
             return new BatchRequest
             {
-                CustomId = (string)Plain(o["custom_id"], ctx)!,
+                // A missing custom_id is passed as missing: the library refuses it locally.
+                CustomId = ((string?)Plain(o["custom_id"], ctx))!,
                 State = State(o, ctx),
                 Questions = Questions((JsonObject)o["questions"]!, ctx),
                 Images = Images(o, ctx),

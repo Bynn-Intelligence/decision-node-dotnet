@@ -267,7 +267,7 @@ public sealed class ConformanceTests
             return;
         }
         var needsBody = exp.ContainsKey("body") || exp.ContainsKey("body_checks") || exp.ContainsKey("ordered_keys");
-        var body = needsBody && bodyText.Length > 0 ? JsonNode.Parse(bodyText) : null;
+        var body = needsBody && bodyText.Length > 0 ? JsonNode.Parse(bodyText, documentOptions: Deep) : null;
         if (exp.ContainsKey("body"))
         {
             if (!Same(Canon(exp["body"]), body))
@@ -723,7 +723,24 @@ public sealed class ConformanceTests
             else if (step["send"] is JsonObject send)
             {
                 var s = (Session)ctx[(string)send["session"]!]!;
-                await s.SendAsync(Driver.Frame(send, ctx));
+                object? sent = null;
+                try
+                {
+                    await s.SendAsync(Driver.Frame(send, ctx));
+                }
+                catch (Exception error) when (error is DecisionNodeError or ArgumentException)
+                {
+                    sent = error;
+                }
+                if (step["outcome"] is JsonObject sendOutcome)
+                {
+                    // The frame must be refused locally: send raises and writes nothing.
+                    CheckOutcome(sendOutcome, sent, where + ".outcome");
+                }
+                else if (sent is Exception error)
+                {
+                    throw Fail($"{where}: send raised {error.GetType().Name}: {error.Message}");
+                }
             }
             else if (step["read"] is JsonObject read)
             {

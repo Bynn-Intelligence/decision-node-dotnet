@@ -10,8 +10,11 @@ public static class Compare
     /// <summary>Keys whose values compare whole, even inside a partial expectation.</summary>
     private static readonly HashSet<string> Exact = new() { "probabilities", "legend", "raw", "entries", "safety", "body", "limits" };
 
+    /// <summary>Reading options deep enough for the nesting cases (the API's limit is 128).</summary>
+    public static readonly JsonDocumentOptions Deep = new() { MaxDepth = 1024 };
+
     /// <summary>Re-reads a node from its JSON text, so every value is backed the same way.</summary>
-    public static JsonNode? Canon(JsonNode? node) => node is null ? null : JsonNode.Parse(node.ToJsonString());
+    public static JsonNode? Canon(JsonNode? node) => node is null ? null : JsonNode.Parse(node.ToJsonString(), documentOptions: Deep);
 
     public static bool Same(JsonNode? a, JsonNode? b)
     {
