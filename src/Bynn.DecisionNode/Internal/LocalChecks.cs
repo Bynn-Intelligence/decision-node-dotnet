@@ -38,19 +38,17 @@ internal static class LocalChecks
     private const decimal TwoTo53 = 9007199254740992m;
     private const int MaxNumberDecimals = 6;
 
-    internal const string Decide = "decide";
-    internal const string SystemOne = "systemone";
-
+    // The question types /v1/decide takes. The yes-or-no type's older wire name stays
+    // accepted in a question written by hand, as the API accepts it; this library writes truth.
     private static readonly string[] DecideTypes = { "truth", "noul", "choice", "score", "number", "point", "box" };
     private static readonly string[] Units = { "pixels", "normalized" };
-    private static readonly string[] SystemOneTypes = { "noul", "choice", "score" };
     private static readonly string[] MediaTypes = { ImageHeader.Jpeg, ImageHeader.Png, ImageHeader.WebP };
 
     // ------------------------------------------------------------------ requests
 
     /// <summary>
     /// A decide body (<c>model</c>, <c>state</c>, <c>questions</c>) with the images of
-    /// <paramref name="imageIds"/> beside it, on <paramref name="profile"/>. The ids are what a
+    /// <paramref name="imageIds"/> beside it. The ids are what a
     /// point or box question may name; <c>null</c> where the request carries no images of its
     /// own (a session's open, whose images come with its frames), so those rules are skipped.
     /// </summary>
@@ -58,7 +56,7 @@ internal static class LocalChecks
     /// <paramref name="entriesAfter"/> are listed after the state's and the questions' entries
     /// (the image and video counts), so one <see cref="ValidationError"/> holds them all.
     /// </remarks>
-    internal static void Request(JsonObject body, IReadOnlyList<string>? imageIds, string profile, JsonObject? held, List<JsonNode?>? entriesBefore = null, IEnumerable<JsonNode?>? entriesAfter = null)
+    internal static void Request(JsonObject body, IReadOnlyList<string>? imageIds, JsonObject? held, List<JsonNode?>? entriesBefore = null, IEnumerable<JsonNode?>? entriesAfter = null)
     {
         // The images sit at body.images[i], three levels deep, whatever their form.
         Nesting(Math.Max(Depth(body), imageIds is { Count: > 0 } ? 3 : 0));
@@ -72,7 +70,7 @@ internal static class LocalChecks
         {
             foreach (var (id, q) in questions)
             {
-                Question(id, q, entries, deferred, profile, held, imageIds);
+                Question(id, q, entries, deferred, held, imageIds);
             }
         }
         if (entriesAfter is not null)
@@ -89,7 +87,7 @@ internal static class LocalChecks
         }
     }
 
-    private static void Question(string id, JsonNode? node, List<JsonNode?> entries, List<DecisionNodeError> deferred, string profile, JsonObject? held, IReadOnlyList<string>? imageIds)
+    private static void Question(string id, JsonNode? node, List<JsonNode?> entries, List<DecisionNodeError> deferred, JsonObject? held, IReadOnlyList<string>? imageIds)
     {
         var at = new JsonArray("body", "questions", id);
         if (node is not JsonObject q)
@@ -103,7 +101,7 @@ internal static class LocalChecks
             return;
         }
         var type = JsonValues.AsString(q["type"]);
-        if (type is null || Array.IndexOf(profile == SystemOne ? SystemOneTypes : DecideTypes, type) < 0)
+        if (type is null || Array.IndexOf(DecideTypes, type) < 0)
         {
             deferred.Add(BadRequest("Invalid request.", "api_usage_error", $"question '{id}': unknown type {q["type"]!.ToJsonString()}"));
             return;
@@ -169,7 +167,7 @@ internal static class LocalChecks
                 {
                     levels = list.ToList();
                 }
-                else if (criteria is JsonObject keyed && profile != SystemOne && IsIndexKeyed(keyed))
+                else if (criteria is JsonObject keyed && IsIndexKeyed(keyed))
                 {
                     // An object keyed "0" to "K-1" is a list on /v1/decide.
                     levels = Enumerable.Range(0, keyed.Count).Select(i => keyed[i.ToString(CultureInfo.InvariantCulture)]).ToList();
@@ -196,7 +194,7 @@ internal static class LocalChecks
                     deferred.Add(BadRequest($"Too many score levels. Must have at most {mostLevels} levels.", null, null));
                 }
                 break;
-            default: // truth, and the same type under its other wire name
+            default: // truth, and the same type under its older wire name in a question written by hand
                 if (criteria is not null && criteria is not JsonObject)
                 {
                     entries.Add(Entry("dict_type", Loc(loc, "criteria"), "Input should be a valid dictionary", criteria));
@@ -849,7 +847,7 @@ internal static class LocalChecks
                 entries.Add(Entry("less_than_equal", new JsonArray("body", name), $"Input should be less than or equal to {high}", sent, new JsonObject { ["le"] = high }));
             }
         }
-        Request(new JsonObject { ["questions"] = body["questions"]?.DeepClone() }, null, Decide, held, entries);
+        Request(new JsonObject { ["questions"] = body["questions"]?.DeepClone() }, null, held, entries);
         if (sessions?["enabled"] is JsonValue enabled && enabled.GetValueKind() == JsonValueKind.False)
         {
             throw BadRequest($"Model {JsonValues.AsString(held!["name"])} does not serve sessions.", "api_usage_error", null);

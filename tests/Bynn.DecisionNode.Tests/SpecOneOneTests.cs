@@ -3,7 +3,7 @@ using static Bynn.DecisionNode.Tests.Http;
 
 namespace Bynn.DecisionNode.Tests;
 
-/// <summary>Number questions, truth read from its other wire name, /v1/systemone and the local checks.</summary>
+/// <summary>Number questions, truth read from its older wire name, and the local checks.</summary>
 public class SpecOneOneTests
 {
     [Fact]
@@ -47,24 +47,6 @@ public class SpecOneOneTests
         var d = await dn.DecideAsync("s", OneTruth());
         Assert.Equal(0.92, d.Truth("q").Truth);
         Assert.IsType<UnknownAnswer>(d["bad"]);
-    }
-
-    [Fact]
-    public async Task SystemoneWritesTruthAsItsWireTypeAndAlwaysSendsAModel()
-    {
-        var stub = new StubHandler((_, _) => Ok("""{"answers":{"q":{"type":"noul","noul":0.3}}}"""));
-        using var dn = Client(stub);
-        var d = await dn.SystemoneAsync("s", new Dictionary<string, Question>
-        {
-            ["q"] = Question.Truth("Is it?"),
-            ["c"] = Question.Choice("Which?", new[] { "a", "b" }),
-        });
-        var sent = Assert.Single(stub.Requests);
-        Assert.Equal("/v1/systemone", sent.Uri.AbsolutePath);
-        Assert.Equal("decisionnode-latest", (string?)sent.Json!["model"]);
-        Assert.Equal("noul", (string?)sent.Json["questions"]!["q"]!["type"]);
-        Assert.Equal("choice", (string?)sent.Json["questions"]!["c"]!["type"]);
-        Assert.Equal(0.3, d.Truth("q").Truth);
     }
 
     public static IEnumerable<object[]> LocalFaults()
@@ -197,13 +179,12 @@ public class SpecOneOneTests
     }
 
     [Fact]
-    public async Task AnUnknownQuestionTypeIsRefusedAndNumberOnSystemone()
+    public async Task AnUnknownQuestionTypeIsRefused()
     {
         var stub = new StubHandler((_, _) => Ok());
         using var dn = Client(stub);
         var unknown = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync("s", new Dictionary<string, Question> { ["q"] = new JsonObject { ["type"] = "rank" } }));
         Assert.Equal("api_usage_error", unknown.ErrorType);
-        await Assert.ThrowsAsync<BadRequestError>(() => dn.SystemoneAsync("s", new Dictionary<string, Question> { ["n"] = Question.Number("How many?") }));
         Assert.Empty(stub.Requests);
     }
 
@@ -262,11 +243,9 @@ public class SpecOneOneTests
         var big = new byte[600_000];
         Fixtures.Read("rgb-7x3.png").CopyTo(big, 0);
         dn.CheckRequest(new DecideRequest { State = "s", Questions = OneTruth(), Images = new[] { Image.FromBytes("scan", big) } });
-        dn.CheckSystemoneRequest(new DecideRequest { Questions = OneTruth() });
         dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 64, TtlSeconds = 3600 });
         dn.Batches.CheckCreate(Array.Empty<BatchRequest>());
         Assert.Throws<ValidationError>(() => dn.CheckRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?", 60, 50) } }));
-        Assert.Throws<BadRequestError>(() => dn.CheckSystemoneRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?") } }));
         Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 65 }));
         var repeated = Assert.Throws<BadRequestError>(() => dn.Batches.CheckAdd(new[]
         {

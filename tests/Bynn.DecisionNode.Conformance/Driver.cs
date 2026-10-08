@@ -158,7 +158,6 @@ public static class Driver
             "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Videos(args, ctx), Text("model"))),
             "models" => Wrap(client.ModelsAsync()),
             "decide_raw" => Wrap(client.DecideRawAsync(args["body"]!.DeepClone())),
-            "systemone" => Wrap(client.SystemoneAsync(State(args, ctx), Questions((JsonObject)args["questions"]!, ctx), Images(args, ctx), Videos(args, ctx), Text("model"))),
             "upload" => Wrap(client.UploadAsync(Images(args, ctx)!)),
             "open_session" => Wrap(client.OpenSessionAsync(SessionBody(args, ctx))),
             "supervise" => SuperviseAsync(client, args, ctx),
@@ -180,9 +179,6 @@ public static class Driver
         {
             case "decide":
                 client.CheckRequest(Request(args, ctx));
-                break;
-            case "systemone":
-                client.CheckSystemoneRequest(Request(args, ctx));
                 break;
             case "open_session":
                 client.CheckRequest(SessionBody(args, ctx));

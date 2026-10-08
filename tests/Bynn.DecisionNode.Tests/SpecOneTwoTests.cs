@@ -243,7 +243,6 @@ public class SpecOneTwoTests
     {
         var bad = new[] { Video.Of("cam", new[] { JpegFrame(0) }, fps: 5) };
         const string message = "Video 'cam': fps must be a number above 0 and at most 4.";
-        Assert.Equal(message, (await Refused(c => c.SystemoneAsync("s", OneTruth(), videos: bad))).Message);
         Assert.Equal(message, (await Refused(c => c.CheckAsync("s", "?", videos: bad))).Message);
         Assert.Equal(message, (await Refused(c => c.ClassifyAsync("s", "?", new[] { "a", "b" }, videos: bad))).Message);
         Assert.Equal(message, (await Refused(c => c.ScoreAsync("s", "?", new object?[] { "lo", "hi" }, videos: bad))).Message);

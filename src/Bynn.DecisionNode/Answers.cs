@@ -64,7 +64,7 @@ public abstract class Answer
             return JsonValues.AsString(raw["type"]) switch
             {
                 "truth" => new TruthAnswer(raw, Number(raw, "truth")),
-                // The yes-or-no type under its other wire name (what /v1/systemone answers).
+                // The yes-or-no type under its older wire name, read the same.
                 "noul" => new TruthAnswer(raw, Number(raw, "noul")),
                 "number" => new NumberAnswer(
                     raw,
@@ -185,8 +185,7 @@ public sealed class UnknownAnswer : Answer
 }
 
 /// <summary>
-/// The answer to a <c>truth</c> question, on <c>/v1/decide</c> and on <c>/v1/systemone</c>
-/// (which writes the yes-or-no type under the wire name that path takes) alike.
+/// The answer to a <c>truth</c> question: the probability that the statement is true.
 /// </summary>
 public sealed class TruthAnswer : Answer
 {

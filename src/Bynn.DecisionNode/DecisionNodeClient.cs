@@ -352,7 +352,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         string? model = null,
         CancellationToken cancellationToken = default)
     {
-        var request = Prepare(state, questions, images, videos, model, systemOne: false);
+        var request = Prepare(state, questions, images, videos, model);
         return SendDecisionAsync(DecidePath, request, cancellationToken);
     }
 
@@ -369,17 +369,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     public void CheckRequest(DecideRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model, systemOne: false);
-    }
-
-    /// <summary>
-    /// Runs every check <see cref="SystemoneAsync"/> runs before sending, on the strict
-    /// path's rules, and throws exactly what it would throw. Sends and uploads nothing.
-    /// </summary>
-    public void CheckSystemoneRequest(DecideRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model, systemOne: true);
+        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model);
     }
 
     /// <summary>Sends one decision described by a <see cref="DecideRequest"/>.</summary>
@@ -387,24 +377,6 @@ public sealed partial class DecisionNodeClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         return DecideAsync(request.State, request.Questions, request.Images, request.Videos, request.Model, cancellationToken);
-    }
-
-    /// <summary>
-    /// Sends one decision to <c>POST /v1/systemone</c>, the strict path. A <c>truth</c>
-    /// question is written with the wire type that path takes and its answers are read
-    /// back as <see cref="TruthAnswer"/>; every other question is sent as given (the path
-    /// takes no <c>number</c> question). A model is always sent.
-    /// </summary>
-    public Task<Decision> SystemoneAsync(
-        object? state,
-        IReadOnlyDictionary<string, Question> questions,
-        IEnumerable<Image>? images = null,
-        IEnumerable<Video>? videos = null,
-        string? model = null,
-        CancellationToken cancellationToken = default)
-    {
-        var request = Prepare(state, questions, images, videos, model, systemOne: true);
-        return SendDecisionAsync(SystemOnePath, request, cancellationToken);
     }
 
     /// <summary>
@@ -427,7 +399,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         var prepared = requests.Select(r =>
         {
             ArgumentNullException.ThrowIfNull(r, nameof(requests));
-            return Prepare(r.State, r.Questions, r.Images, r.Videos, r.Model, systemOne: false);
+            return Prepare(r.State, r.Questions, r.Images, r.Videos, r.Model);
         }).ToList();
         return DecideManyCoreAsync(prepared, concurrency, cancellationToken);
     }
@@ -653,7 +625,6 @@ public sealed partial class DecisionNodeClient : IDisposable
     // ------------------------------------------------------------------ request building
 
     internal const string DecidePath = "/v1/decide";
-    internal const string SystemOnePath = "/v1/systemone";
     internal const string JsonContentType = "application/json";
 
     /// <summary>A decision's body without its images, checked, and the images to place at send time.</summary>
@@ -674,20 +645,9 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// Builds a decision body and checks it by the API's fixed rules, so a request the server
     /// would refuse fails here, before any network call.
     /// </summary>
-    private PreparedRequest Prepare(object? state, IReadOnlyDictionary<string, Question> questions, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, bool systemOne)
+    private PreparedRequest Prepare(object? state, IReadOnlyDictionary<string, Question> questions, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model)
     {
         var qs = QuestionMap(questions, nameof(questions));
-        if (systemOne)
-        {
-            // The strict path takes the yes-or-no type under its own wire name only.
-            foreach (var (_, q) in qs)
-            {
-                if (q is JsonObject o && JsonValues.AsString(o["type"]) == "truth")
-                {
-                    o["type"] = "noul";
-                }
-            }
-        }
         var list = ImageList(images, nameof(images));
         var videoList = VideoList(videos, nameof(videos));
         var body = new JsonObject
@@ -698,12 +658,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         };
         WithVideos(body, videoList);
         var held = Held(model);
-        LocalChecks.Request(
-            body,
-            list.Select(i => i.Id).ToList(),
-            systemOne ? LocalChecks.SystemOne : LocalChecks.Decide,
-            held,
-            entriesAfter: LocalChecks.CountEntries(list, videoList, held));
+        LocalChecks.Request(body, list.Select(i => i.Id).ToList(), held, entriesAfter: LocalChecks.CountEntries(list, videoList, held));
         LocalChecks.Images(list, held);
         LocalChecks.Videos(videoList, list.Select(i => i.Id));
         return new PreparedRequest(body, list);

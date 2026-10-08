@@ -83,7 +83,6 @@ Answers are read by question id: `d["route"]`, or typed with `d.Truth(id)`, `d.C
 | `ClassifyAsync(state, instructions, options, images, videos, model)` | One choice question; returns its `ChoiceAnswer` |
 | `ScoreAsync(state, instructions, levels, images, videos, model)` | One score question; returns its `ScoreAnswer` |
 | `NumberAsync(state, instructions, min, max, step, images, videos, model)` | One number question; returns its `NumberAnswer` |
-| `SystemoneAsync(state, questions, images, videos, model)` | One decision on `POST /v1/systemone`, the strict path. Truth questions are sent with that path's wire type and read back as `TruthAnswer` |
 | `UploadAsync(images)` | Uploads images whatever their size and returns one `upload_id` each (see Images) |
 | `OpenSessionAsync(state, questions, instructions, model, window, ttlSeconds)` | Opens a session (see Sessions) |
 | `SuperviseAsync(body, feed, onReply)` | Keeps a feed of readings answered, reopening sessions as needed (see Sessions) |
@@ -178,7 +177,7 @@ Console.WriteLine(d.Truth("any_damage").Truth);
 
 Coordinates are whole pixels of the image as sent (after its EXIF orientation), or fractions of the width and height from 0 to 1 with `units: "normalized"`. Every number is as received. `image` names the image to look in and is needed when the request carries two or more images; with one image it can be left out.
 
-Before anything is sent the library checks that the request carries an image, that `image` names one of the request's images (a video's id is not an image's), that `units` is `pixels` or `normalized`, and that the question has instructions. A fault throws the `ValidationError` the API would answer, with every fault of the request in its `Entries`, or the `BadRequestError` for missing instructions. Points and boxes go with `DecideAsync`, `DecideManyAsync` and batch lines; `SystemoneAsync`, the strict path, takes neither.
+Before anything is sent the library checks that the request carries an image, that `image` names one of the request's images (a video's id is not an image's), that `units` is `pixels` or `normalized`, and that the question has instructions. A fault throws the `ValidationError` the API would answer, with every fault of the request in its `Entries`, or the `BadRequestError` for missing instructions. Points and boxes go with `DecideAsync`, `DecideManyAsync` and batch lines.
 
 ## Videos
 
@@ -214,7 +213,7 @@ Console.WriteLine(d.Usage.VideoSeconds); // the seconds of video read
 
 Frames always go inline: they are never uploaded, never cached and never resized or re-encoded, and they do not count toward the inline threshold for images. Up to 4 videos go with up to 16 images in one request (more is the API's `ValidationError`, a `too_long` entry on `["body", "videos"]`), and a video's id must differ from every image's id. Before anything is sent the library checks each video's id, its frames (at least one; each time a number of at least 0, larger than the one before it; JPEG, PNG or WebP), `fps`, `start` and `end`, and throws the `BadRequestError` the API would answer, with nothing sent. How many frames a request may carry, the frames' bytes and sizes, and the token budget are the server's to judge. When the server reads a video at a lower rate or resolution than asked, it says so in `Decision.Warnings`.
 
-Videos go with `DecideAsync`, `SystemoneAsync`, the helpers, `DecideManyAsync` and batch lines (`BatchRequest.Videos`). Sessions take no videos.
+Videos go with `DecideAsync`, the helpers, `DecideManyAsync` and batch lines (`BatchRequest.Videos`). Sessions take no videos.
 
 To turn a video file into frames, use the `dn` command line: `dn truth "Does a person fall?" --video dock.mp4` samples the file on your machine and sends only the frames.
 
@@ -332,11 +331,11 @@ The library checks every fixed rule the API documents before sending, so a reque
 
 - `BadRequestError` with the API's message and no `ErrorType` for a choice without options or with more than 255, a score with more than 10 levels, a truth question with neither instructions nor criteria, and a number question without instructions.
 - `ValidationError` with the server's exact `Entries` for a question without a type or with fields of the wrong type, a state that is not a string, an object or an array, a number grid the API cannot build (`min` above `max`, a `step` not above 0, more than 6 decimals, beyond 2^53, more than 4,096 values), and a session `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600.
-- `BadRequestError` with `ErrorType` `api_usage_error` for an unknown question type (a number question on `SystemoneAsync` included), a request nested more than 128 levels deep, an image fault (see Images), a frame fault (see Sessions), a batch request without a unique `custom_id` or an empty add, and `ListAsync` paging out of range; `image_url_refused` for an image URL with user information, a port other than 443, or a literal private address.
+- `BadRequestError` with `ErrorType` `api_usage_error` for an unknown question type, a request nested more than 128 levels deep, an image fault (see Images), a frame fault (see Sessions), a batch request without a unique `custom_id` or an empty add, and `ListAsync` paging out of range; `image_url_refused` for an image URL with user information, a port other than 443, or a literal private address.
 
 Limits only `/v1/models` states, such as whether a model answers number questions or serves sessions, its session window, `requests_per_batch` and `max_custom_id_chars`, are checked once you have called `ModelsAsync()` on the client, and left to the server otherwise. A model is found in that list by its name, its alias (`decisionnode-latest`) or its pinned version. Token limits stay the server's, because they differ by model.
 
-To run the same checks without sending, for example to validate input as it is entered, call `CheckRequest(request)` (a `DecideRequest` or `SessionOptions`), `CheckSystemoneRequest(request)`, `Batches.CheckCreate(requests)`, `Batches.CheckAdd(requests)` or `session.CheckFrame(...)`. Each throws exactly what the call would throw and returns when the call would be sent; nothing is sent and nothing uploaded.
+To run the same checks without sending, for example to validate input as it is entered, call `CheckRequest(request)` (a `DecideRequest` or `SessionOptions`), `Batches.CheckCreate(requests)`, `Batches.CheckAdd(requests)` or `session.CheckFrame(...)`. Each throws exactly what the call would throw and returns when the call would be sent; nothing is sent and nothing uploaded.
 
 ```csharp
 try
@@ -422,7 +421,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.9); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.10); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with the `DECISIONNODE_CONFORMANCE_TOKEN` secret and `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 

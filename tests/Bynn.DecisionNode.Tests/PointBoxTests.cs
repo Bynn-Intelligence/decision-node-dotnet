@@ -141,14 +141,10 @@ public class PointBoxTests
     }
 
     [Fact]
-    public async Task SystemoneRefusesPlacesAndSessionsAndBatchesCheckThem()
+    public void SessionsLeaveTheImageRulesToFramesAndBatchesCheckThem()
     {
         var stub = new StubHandler((_, _) => Ok());
         using var dn = Client(stub);
-        var strict = await Assert.ThrowsAsync<BadRequestError>(() => dn.SystemoneAsync("s", new Dictionary<string, Question> { ["d"] = Question.Box("Draw a box.") }, new[] { Belt }));
-        Assert.Equal("Invalid request.", strict.Message);
-        Assert.Equal("api_usage_error", strict.ErrorType);
-
         // A session's images come with its frames, so the image rules wait for them.
         dn.CheckRequest(new SessionOptions { State = "Line 3.", Questions = new Dictionary<string, Question> { ["pick"] = Question.Point("Point to it.") } });
 
