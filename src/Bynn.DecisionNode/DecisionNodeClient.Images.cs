@@ -44,10 +44,15 @@ public sealed partial class DecisionNodeClient
     /// workspace, within the hour.
     /// </summary>
     /// <exception cref="ArgumentException">An image is given by URL: a URL is never uploaded.</exception>
-    /// <exception cref="BadRequestError">An image breaks a fixed rule of the API; nothing is sent.</exception>
+    /// <exception cref="BadRequestError">More than 16 images, or an image that breaks a fixed rule of the API; nothing is sent.</exception>
     public async Task<IReadOnlyList<string>> UploadAsync(IEnumerable<Image> images, CancellationToken cancellationToken = default)
     {
         var list = ImageList(images, nameof(images));
+        if (list.Count > LocalChecks.MaxUploadFiles)
+        {
+            // One presign takes 1 to 16 files: its own 400, raised before anything is sent.
+            throw LocalChecks.BadRequest($"files: 1 to {LocalChecks.MaxUploadFiles} files, got {list.Count}.", "api_usage_error");
+        }
         foreach (var image in list)
         {
             if (image.Url is not null)

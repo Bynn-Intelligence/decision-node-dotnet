@@ -40,8 +40,60 @@ public class SpecOneTwoTests
         await dn.DecideAsync("s", OneTruth(), Enumerable.Range(0, 16).Select(i => Image.FromBytes("i" + i, Png)));
         Assert.Equal(16, ((JsonArray)Assert.Single(stub.Requests).Json!["images"]!).Count);
 
-        var error = await Refused(c => c.DecideAsync("s", OneTruth(), Enumerable.Range(0, 17).Select(i => Image.FromUrl("u" + i, "https://x.example/" + i))));
-        Assert.Equal("Too many images: 17, the limit is 16.", error.Message);
+        var refused = new StubHandler((_, _) => Ok());
+        using var other = Client(refused);
+        var images = new[] { Image.FromBytes("a", Png), Image.FromUploadId("b", "upl_1", "image/png") }
+            .Concat(Enumerable.Range(0, 15).Select(i => Image.FromUrl("u" + i, "https://x.example/" + i)));
+        var error = await Assert.ThrowsAsync<ValidationError>(() => other.DecideAsync("s", OneTruth(), images));
+        Assert.Null(error.Status);
+        Assert.Null(error.RequestId);
+        Assert.Empty(refused.Requests);
+        var entry = (JsonObject)Assert.Single(error.Entries!)!;
+        Assert.Equal("too_long", (string?)entry["type"]);
+        Assert.Equal("""["body","images"]""", entry["loc"]!.ToJsonString());
+        Assert.Equal("List should have at most 16 items after validation, not 17", (string?)entry["msg"]);
+        Assert.Equal("""{"field_type":"List","max_length":16,"actual_length":17}""", entry["ctx"]!.ToJsonString());
+        var listed = (JsonArray)entry["input"]!;
+        Assert.Equal("""{"id":"a","media_type":"image/png"}""", listed[0]!.ToJsonString());
+        Assert.Equal("""{"id":"b","upload_id":"upl_1","media_type":"image/png"}""", listed[1]!.ToJsonString());
+        Assert.Equal("""{"id":"u0","url":"https://x.example/0"}""", listed[2]!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task CountsJoinTheRequestsOtherEntriesImagesBeforeVideos()
+    {
+        var stub = new StubHandler((_, _) => Ok());
+        using var dn = Client(stub);
+        var videos = Enumerable.Range(0, 5).Select(i => Video.Of("v" + i, new[] { JpegFrame(0) })).ToArray();
+        var error = await Assert.ThrowsAsync<ValidationError>(() => dn.DecideAsync(
+            "s",
+            new Dictionary<string, Question> { ["route"] = new JsonObject { ["type"] = "choice", ["instructions"] = "Where?" } },
+            Enumerable.Range(0, 17).Select(i => Image.FromUrl("u" + i, "https://x.example/" + i)),
+            videos));
+        Assert.Empty(stub.Requests);
+        var entries = error.Entries!.Select(e => (string)e!["type"]! + " " + e["loc"]!.ToJsonString()).ToList();
+        Assert.Equal(new[]
+        {
+            """missing ["body","questions","route","choice","criteria"]""",
+            """too_long ["body","images"]""",
+            """too_long ["body","videos"]""",
+        }, entries);
+        var videoEntry = (JsonObject)error.Entries![2]!;
+        Assert.Equal("List should have at most 4 items after validation, not 5", (string?)videoEntry["msg"]);
+        Assert.True(JsonNode.DeepEquals(videos[4].ToJson(), videoEntry["input"]![4]));
+    }
+
+    [Fact]
+    public async Task AHeldLowerImageLimitIsTheMaxLength()
+    {
+        var stub = new StubHandler((r, _) => r.Uri.AbsolutePath == "/v1/models"
+            ? Ok("""{"models":[{"name":"decisionnode-latest","description":"d","release_date":"2026-10-08","images":{"max_images":2}}]}""")
+            : Ok());
+        using var dn = Client(stub);
+        await dn.ModelsAsync();
+        var error = await Assert.ThrowsAsync<ValidationError>(() => dn.DecideAsync("s", OneTruth(), Enumerable.Range(0, 3).Select(i => Image.FromUrl("u" + i, "https://x.example/" + i))));
+        Assert.Equal(2, (long)error.Entries![0]!["ctx"]!["max_length"]!);
+        Assert.Single(stub.Requests);
     }
 
     [Fact]
@@ -122,7 +174,6 @@ public class SpecOneTwoTests
     public static IEnumerable<object?[]> VideoFaults()
     {
         var frame = JpegFrame(0);
-        yield return new object?[] { Enumerable.Range(0, 5).Select(i => Video.Of("v" + i, new[] { frame })).ToArray(), null, "Too many videos: 5, the limit is 4." };
         yield return new object?[] { new[] { Video.Of("", new[] { frame }) }, null, "Video 0 needs an id." };
         yield return new object?[] { new[] { Video.Of("cam", new[] { frame }), Video.Of("cam", new[] { frame }) }, null, "Video id 'cam' is used twice (ids are unique across images and videos)." };
         yield return new object?[] { new[] { Video.Of("gate", new[] { frame }) }, Image.FromUrl("gate", "https://x.example/g.jpg"), "Video id 'gate' is used twice (ids are unique across images and videos)." };

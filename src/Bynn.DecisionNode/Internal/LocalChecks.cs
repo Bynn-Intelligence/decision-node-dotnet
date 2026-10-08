@@ -54,7 +54,11 @@ internal static class LocalChecks
     /// point or box question may name; <c>null</c> where the request carries no images of its
     /// own (a session's open, whose images come with its frames), so those rules are skipped.
     /// </summary>
-    internal static void Request(JsonObject body, IReadOnlyList<string>? imageIds, string profile, JsonObject? held, List<JsonNode?>? entriesBefore = null)
+    /// <remarks>
+    /// <paramref name="entriesAfter"/> are listed after the state's and the questions' entries
+    /// (the image and video counts), so one <see cref="ValidationError"/> holds them all.
+    /// </remarks>
+    internal static void Request(JsonObject body, IReadOnlyList<string>? imageIds, string profile, JsonObject? held, List<JsonNode?>? entriesBefore = null, IEnumerable<JsonNode?>? entriesAfter = null)
     {
         // The images sit at body.images[i], three levels deep, whatever their form.
         Nesting(Math.Max(Depth(body), imageIds is { Count: > 0 } ? 3 : 0));
@@ -70,6 +74,10 @@ internal static class LocalChecks
             {
                 Question(id, q, entries, deferred, profile, held, imageIds);
             }
+        }
+        if (entriesAfter is not null)
+        {
+            entries.AddRange(entriesAfter);
         }
         if (entries.Count > 0)
         {
@@ -455,14 +463,54 @@ internal static class LocalChecks
 
     // ------------------------------------------------------------------ images
 
-    /// <summary>The request's images: the count, the ids, URLs, upload references and local bytes.</summary>
+    /// <summary>
+    /// More images or videos than a request takes: the API's <c>422</c> <c>too_long</c> entries on
+    /// <c>["body", "images"]</c> and <c>["body", "videos"]</c>, images first. Each lists the
+    /// request's items in their wire form, a local image as its id and media type only: nothing
+    /// is encoded or uploaded to build an error.
+    /// </summary>
+    internal static List<JsonNode?> CountEntries(IReadOnlyList<Image> images, IReadOnlyList<JsonObject> videos, JsonObject? held)
+    {
+        var entries = new List<JsonNode?>();
+        var mostImages = Positive(held?["max_images"]) ?? Positive((held?["images"] as JsonObject)?["max_images"]) ?? MaxImages;
+        if (images.Count > mostImages)
+        {
+            entries.Add(TooLong("images", new JsonArray(images.Select(i => (JsonNode?)ListedImage(i)).ToArray()), mostImages));
+        }
+        if (videos.Count > MaxVideos)
+        {
+            entries.Add(TooLong("videos", new JsonArray(videos.Select(v => (JsonNode?)v.DeepClone()).ToArray()), MaxVideos));
+        }
+        return entries;
+    }
+
+    private static long? Positive(JsonNode? node) => JsonValues.AsLong(node) is > 0 and var n ? n : null;
+
+    private static JsonObject TooLong(string field, JsonArray input, long most) => Entry(
+        "too_long",
+        new JsonArray("body", field),
+        $"List should have at most {most} items after validation, not {input.Count}",
+        input,
+        new JsonObject { ["field_type"] = "List", ["max_length"] = most, ["actual_length"] = input.Count });
+
+    /// <summary>An image as a <c>422</c> entry lists it: its wire form, a local image's bytes left out.</summary>
+    private static JsonObject ListedImage(Image image)
+    {
+        if (!image.IsLocal)
+        {
+            return image.ToJson();
+        }
+        var listed = new JsonObject { ["id"] = image.Id };
+        if (image.MediaType is { } type)
+        {
+            listed["media_type"] = type;
+        }
+        return listed;
+    }
+
+    /// <summary>The request's images: the ids, URLs, upload references and local bytes.</summary>
     internal static void Images(IReadOnlyList<Image> images, JsonObject? held)
     {
-        var most = (int?)(JsonValues.AsLong(held?["max_images"]) ?? JsonValues.AsLong((held?["images"] as JsonObject)?["max_images"])) ?? MaxImages;
-        if (images.Count > most)
-        {
-            throw BadRequest($"Too many images: {images.Count}, the limit is {most}.", "api_usage_error", null);
-        }
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < images.Count; i++)
         {
@@ -645,21 +693,16 @@ internal static class LocalChecks
     // ------------------------------------------------------------------ videos
 
     /// <summary>
-    /// The request's videos in their wire form, after the images: the count, then each video
-    /// in turn (its id, unique across images and videos; its frames, each frame's time and
+    /// The request's videos in their wire form, after the images (their count is one of the
+    /// <see cref="CountEntries"/>): each video in turn (its id, unique across images and videos; its frames, each frame's time and
     /// media type; <c>fps</c>, <c>start</c> and <c>end</c>). The frame counts, the frames'
     /// bytes and sizes and the token budget are the server's.
     /// </summary>
-    internal static void Videos(IReadOnlyList<JsonObject> videos, IEnumerable<string> imageIds, JsonObject? held)
+    internal static void Videos(IReadOnlyList<JsonObject> videos, IEnumerable<string> imageIds)
     {
         if (videos.Count == 0)
         {
             return;
-        }
-        var most = (int?)JsonValues.AsLong((held?["videos"] as JsonObject)?["max_videos"]) ?? MaxVideos;
-        if (videos.Count > most)
-        {
-            throw BadRequest($"Too many videos: {videos.Count}, the limit is {most}.", "api_usage_error", null);
         }
         var seen = new HashSet<string>(imageIds, StringComparer.Ordinal);
         for (var i = 0; i < videos.Count; i++)

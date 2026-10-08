@@ -91,7 +91,7 @@ public class UploadTests
     }
 
     [Fact]
-    public async Task SixteenImagesAreUploadedInOnePresignAndUploadSplitsAtSixteen()
+    public async Task SixteenImagesAreUploadedInOnePresignAndSeventeenAreRefused()
     {
         var (dn, api, storage) = Make();
         using var _ = dn;
@@ -107,10 +107,11 @@ public class UploadTests
         Assert.Equal(16, ((JsonArray)requests[0].Json!["files"]!).Count);
         Assert.Equal(16, storage.Requests.Count);
 
-        var ids = await dn.UploadAsync(Enumerable.Range(100, 17).Select(Distinct));
-        Assert.Equal(17, ids.Count);
-        var presigns = api.Requests.Skip(2).Select(r => ((JsonArray)r.Json!["files"]!).Count).ToList();
-        Assert.Equal(new[] { 16, 1 }, presigns);
+        var error = await Assert.ThrowsAsync<BadRequestError>(() => dn.UploadAsync(Enumerable.Range(100, 17).Select(Distinct)));
+        Assert.Equal("files: 1 to 16 files, got 17.", error.Message);
+        Assert.Equal("api_usage_error", error.ErrorType);
+        Assert.Null(error.Status);
+        Assert.Equal(2, api.Requests.Count);
     }
 
     [Fact]

@@ -16,11 +16,12 @@ namespace Bynn.DecisionNode;
 /// frames, use the <c>dn</c> command line's <c>--video</c> option.
 /// </para>
 /// <para>
-/// The fixed rules of a video are checked on this machine before anything is sent (at most 4
-/// videos, an id unique across images and videos, frame times of at least 0 that increase,
-/// the frames' media types, <c>fps</c>, <c>start</c> and <c>end</c>), each raising the
-/// <see cref="BadRequestError"/> the API would answer. The frame counts, the frames' bytes and
-/// sizes and the token budget are the server's to judge.
+/// The fixed rules of a video are checked on this machine before anything is sent (an id
+/// unique across images and videos, frame times of at least 0 that increase, the frames'
+/// media types, <c>fps</c>, <c>start</c> and <c>end</c>), each raising the
+/// <see cref="BadRequestError"/> the API would answer; more than 4 videos in a request is the
+/// API's <see cref="ValidationError"/>. The frame counts, the frames' bytes and sizes and the
+/// token budget are the server's to judge.
 /// </para>
 /// <para>A <see cref="Video"/> is immutable and can be reused across requests and threads.</para>
 /// </remarks>
