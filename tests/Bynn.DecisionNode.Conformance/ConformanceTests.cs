@@ -409,6 +409,30 @@ public sealed class ConformanceTests
         }
     }
 
+    /// <summary><c>batch_results</c> whole, or <c>count</c> with <c>batch_results_sample</c> by index.</summary>
+    private static void CheckResultsSpec(JsonObject spec, List<BatchResult> results, string path)
+    {
+        if (spec["batch_results"] is JsonArray whole)
+        {
+            CheckBatchResults(whole, results, path + ".batch_results");
+        }
+        if (spec["count"] is { } count && results.Count != (int)count)
+        {
+            throw Fail($"{path}: expected {count} results, got {results.Count}");
+        }
+        foreach (var sample in (spec["batch_results_sample"] as JsonArray ?? new JsonArray()).Cast<JsonObject>())
+        {
+            var i = (int)sample["index"]!;
+            if (i >= results.Count)
+            {
+                throw Fail($"{path}: no result {i} of {results.Count}");
+            }
+            var one = (JsonObject)sample.DeepClone();
+            one.Remove("index");
+            CheckBatchResult(one, results[i], $"{path}.batch_results[{i}]");
+        }
+    }
+
     private static void CheckBatchResults(JsonArray expected, List<BatchResult> results, string path)
     {
         if (results.Count != expected.Count)
@@ -417,9 +441,13 @@ public sealed class ConformanceTests
         }
         for (var i = 0; i < results.Count; i++)
         {
-            var spec = (JsonObject)expected[i]!;
-            var r = results[i];
-            var where = $"{path}[{i}]";
+            CheckBatchResult((JsonObject)expected[i]!, results[i], $"{path}[{i}]");
+        }
+    }
+
+    private static void CheckBatchResult(JsonObject spec, BatchResult r, string where)
+    {
+        {
             if (spec.ContainsKey("custom_id") && !Same(Canon(spec["custom_id"]), JsonValue.Create(r.CustomId)))
             {
                 throw Fail($"{where}.custom_id: expected {Short(spec["custom_id"])}, got {r.CustomId}");
@@ -724,9 +752,19 @@ public sealed class ConformanceTests
             {
                 var s = (Session)ctx[(string)send["session"]!]!;
                 object? sent = null;
+                var checkOnly = (bool?)step["check"] == true;
                 try
                 {
-                    await s.SendAsync(Driver.Frame(send, ctx));
+                    if (checkOnly)
+                    {
+                        // The frame handed to the library's check instead of being sent.
+                        s.CheckFrame(Driver.Frame(send, ctx));
+                        sent = new Checked();
+                    }
+                    else
+                    {
+                        await s.SendAsync(Driver.Frame(send, ctx));
+                    }
                 }
                 catch (Exception error) when (error is DecisionNodeError or ArgumentException)
                 {
@@ -737,7 +775,7 @@ public sealed class ConformanceTests
                     // The frame must be refused locally: send raises and writes nothing.
                     CheckOutcome(sendOutcome, sent, where + ".outcome");
                 }
-                else if (sent is Exception error)
+                else if (sent is Exception error && !checkOnly)
                 {
                     throw Fail($"{where}: send raised {error.GetType().Name}: {error.Message}");
                 }
@@ -939,14 +977,17 @@ public sealed class ConformanceTests
                     Match(Canon(spec["batch_page"] ?? new JsonObject()), Canon(Driver.Page((BatchPage)result!)), path + ".batch_page");
                     break;
                 case "batch_results":
-                    CheckBatchResults((JsonArray)spec["batch_results"]!, (List<BatchResult>)result!, path + ".batch_results");
+                    CheckResultsSpec(spec, (List<BatchResult>)result!, path);
                     break;
                 case "batch_run":
                     var run = (BatchRunResult)result!;
                     Match(Canon(spec["batch"] ?? new JsonObject()), Canon(Driver.Batch(run.Batch)), path + ".batch");
-                    if (spec["batch_results"] is JsonArray runResults)
+                    CheckResultsSpec(spec, run.Results, path);
+                    break;
+                case "checked":
+                    if (result is not Checked)
                     {
-                        CheckBatchResults(runResults, run.Results, path + ".batch_results");
+                        throw Fail($"{path}: expected a clean check, got {Describe(result)}");
                     }
                     break;
                 case "session":

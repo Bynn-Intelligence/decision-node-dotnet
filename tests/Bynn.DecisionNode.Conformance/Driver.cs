@@ -6,6 +6,9 @@ namespace Bynn.DecisionNode.Conformance;
 /// <summary>What <c>supervise</c> returned, with the events its callback collected.</summary>
 public sealed record Supervised(List<SessionEvent> Replies, SessionClosed? Closed);
 
+/// <summary>What a check returned when it found nothing.</summary>
+public sealed record Checked;
+
 /// <summary>What <c>run_batch</c> returned, its results read.</summary>
 public sealed record BatchRunResult(Batch Batch, List<BatchResult> Results);
 
@@ -62,6 +65,7 @@ public static class Driver
                 Timeout = spec["timeout"] is { } t ? TimeSpan.FromSeconds((double)t) : null,
                 MaxRetries = spec["max_retries"] is { } r ? (int)r : null,
                 InlineThreshold = spec["inline_threshold"] is { } it ? (int)it : null,
+                UploadTimeout = spec["upload_timeout"] is { } ut ? TimeSpan.FromSeconds((double)ut) : null,
                 Headers = headers,
                 HttpClient = http,
             });
@@ -130,6 +134,12 @@ public static class Driver
     {
         var method = (string)call["method"]!;
         var args = (JsonObject)call["args"]!;
+        if ((bool?)call["check"] == true)
+        {
+            // The same request handed to the library's check instead of being sent.
+            Check(client, method, args, ctx);
+            return Task.FromResult<object?>(new Checked());
+        }
         JsonNode? Arg(string key) => Plain(args[key], ctx);
         string? Text(string key) => (string?)Arg(key);
         double? Number(string key) => Arg(key) is { } n ? (double)n : null;
@@ -162,6 +172,30 @@ public static class Driver
             "batches.cancel" => Wrap(client.Batches.CancelAsync(Text("batch_id")!)),
             _ => throw new InvalidOperationException("unknown method " + method),
         };
+    }
+
+    private static void Check(DecisionNodeClient client, string method, JsonObject args, Dictionary<string, object?> ctx)
+    {
+        switch (method)
+        {
+            case "decide":
+                client.CheckRequest(Request(args, ctx));
+                break;
+            case "systemone":
+                client.CheckSystemoneRequest(Request(args, ctx));
+                break;
+            case "open_session":
+                client.CheckRequest(SessionBody(args, ctx));
+                break;
+            case "batches.create":
+                client.Batches.CheckCreate(BatchRequests(args, ctx));
+                break;
+            case "batches.add":
+                client.Batches.CheckAdd(BatchRequests(args, ctx));
+                break;
+            default:
+                throw new InvalidOperationException("no check for " + method);
+        }
     }
 
     private static async Task<object?> Wrap<T>(Task<T> task) => await task;
@@ -225,6 +259,10 @@ public static class Driver
             case JsonObject o when o.Count == 1 && o.First().Key == "$text":
                 var spec = (JsonObject)o.First().Value!;
                 return JsonValue.Create(string.Concat(Enumerable.Repeat((string)spec["repeat"]!, (int)spec["times"]!)));
+            case JsonObject o when o.Count == 1 && o.First().Key == "$list":
+                var listSpec = (JsonObject)o.First().Value!;
+                var count = (int)listSpec["count"]!;
+                return new JsonArray(Enumerable.Range(0, count).Select(i => Plain(WithIndex(listSpec["item"], i), ctx)).ToArray());
             case JsonObject o when o.Count == 1 && o.First().Key == "$nest":
                 var nest = (JsonObject)o.First().Value!;
                 var inner = Plain(nest["value"], ctx);
@@ -248,6 +286,16 @@ public static class Driver
                 return value?.DeepClone();
         }
     }
+
+    /// <summary>A copy with <c>{i}</c> in every string replaced by the index.</summary>
+    private static JsonNode? WithIndex(JsonNode? value, int i) => value switch
+    {
+        JsonValue v when v.GetValueKind() == System.Text.Json.JsonValueKind.String =>
+            JsonValue.Create(((string)v!).Replace("{i}", i.ToString(CultureInfo.InvariantCulture))),
+        JsonObject o => new JsonObject(o.Select(kv => new KeyValuePair<string, JsonNode?>(kv.Key, WithIndex(kv.Value, i)))),
+        JsonArray a => new JsonArray(a.Select(x => WithIndex(x, i)).ToArray()),
+        _ => value?.DeepClone(),
+    };
 
     private static JsonNode? Resolve(string path, Dictionary<string, object?> ctx)
     {
@@ -279,7 +327,7 @@ public static class Driver
     };
 
     private static List<BatchRequest> BatchRequests(JsonObject args, Dictionary<string, object?> ctx) =>
-        ((JsonArray)args["requests"]!).Select(r =>
+        ((JsonArray)Plain(args["requests"], ctx)!).Select(r =>
         {
             var o = (JsonObject)r!;
             return new BatchRequest
