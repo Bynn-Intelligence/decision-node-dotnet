@@ -23,6 +23,13 @@ public sealed class DecisionNodeClientOptions
     /// <summary>The time allowed for each attempt, from sending to the last byte of the body. Above zero; default 10 seconds.</summary>
     public TimeSpan? Timeout { get; set; }
 
+    /// <summary>
+    /// The time allowed for each attempt of an image's storage <c>PUT</c>, apart from
+    /// <see cref="Timeout"/>: a 10 MB image on a slow uplink needs more than an API call.
+    /// Above zero; default 60 seconds.
+    /// </summary>
+    public TimeSpan? UploadTimeout { get; set; }
+
     /// <summary>Retries after the first attempt. 0 or more; default 2.</summary>
     public int? MaxRetries { get; set; }
 

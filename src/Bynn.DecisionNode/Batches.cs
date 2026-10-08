@@ -180,6 +180,16 @@ public sealed class BatchesClient
         }
     }
 
+    /// <summary>
+    /// Runs every check <see cref="CreateAsync"/> runs before sending (the <c>custom_id</c>
+    /// rules, then each request as a decide request, held limits included) and throws exactly
+    /// what it would throw. Sends and uploads nothing; returns when the call would be sent.
+    /// </summary>
+    public void CheckCreate(IEnumerable<BatchRequest> requests) => _ = Prepare(requests, allowEmpty: true);
+
+    /// <summary>As <see cref="CheckCreate"/>, for <see cref="AddAsync"/>, which takes at least one request.</summary>
+    public void CheckAdd(IEnumerable<BatchRequest> requests) => _ = Prepare(requests, allowEmpty: false);
+
     /// <summary>Reads a batch (<c>GET /v1/batches/{id}</c>).</summary>
     public async Task<Batch> GetAsync(string batchId, CancellationToken cancellationToken = default) =>
         (await GetWithHeadersAsync(batchId, cancellationToken).ConfigureAwait(false)).Batch;
@@ -218,9 +228,12 @@ public sealed class BatchesClient
     }
 
     /// <summary>
-    /// The results of an ended batch (<c>GET /v1/batches/{id}/results</c>), one per request
-    /// in upload order, read line by line as they arrive. A <c>409</c> <c>results_not_ready</c>
-    /// is a <see cref="DecisionNodeError"/> with that <c>error_type</c>; <c>410</c>
+    /// The results of an ended batch (<c>GET /v1/batches/{id}/results</c>): every line of the
+    /// file, one per request in upload order, read line by line as they arrive, so a file of
+    /// any size is never held whole. The client's timeout covers the wait for the answer and
+    /// then each wait for the next bytes of the body; a body that stops arriving for that long
+    /// is a <see cref="TimeoutError"/>. A <c>409</c> <c>results_not_ready</c> is a
+    /// <see cref="DecisionNodeError"/> with that <c>error_type</c>; <c>410</c>
     /// <c>results_expired</c> likewise.
     /// </summary>
     public async IAsyncEnumerable<BatchResult> ResultsAsync(string batchId, [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -230,8 +243,31 @@ public sealed class BatchesClient
         using var response = result.Response!;
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var reader = new StreamReader(stream, Encoding.UTF8);
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        while (true)
         {
+            string? line;
+            idle.CancelAfter(_client.Timeout);
+            try
+            {
+                line = await reader.ReadLineAsync(idle.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutError(new ErrorDetails
+                {
+                    Message = $"the batch results stopped arriving for {_client.Timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s",
+                    Inner = ex,
+                });
+            }
+            catch (Exception ex) when (ex is IOException or HttpRequestException)
+            {
+                throw new ConnectionError(new ErrorDetails { Message = "connection error while reading the batch results: " + ex.Message, Inner = ex });
+            }
+            if (line is null)
+            {
+                break;
+            }
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;

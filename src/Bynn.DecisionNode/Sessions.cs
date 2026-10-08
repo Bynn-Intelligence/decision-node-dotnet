@@ -33,6 +33,38 @@ public sealed partial class DecisionNodeClient
         int? ttlSeconds = null,
         CancellationToken cancellationToken = default)
     {
+        var body = OpenBody(state, questions, instructions, model, window, ttlSeconds);
+        var (parsed, result) = await SendJsonAsync(HttpMethod.Post, "/v1/sessions", JsonValues.ToUtf8(body), JsonContentType, RetryPolicy.SessionOpen, cancellationToken).ConfigureAwait(false);
+        if (parsed is not JsonObject raw || JsonValues.AsString(raw["session_id"]) is null || JsonValues.AsString(raw["stream_url"]) is null)
+        {
+            throw new ServerError(new ErrorDetails
+            {
+                Status = result.Status,
+                RequestId = result.Header("x-request-id"),
+                Message = "the response of POST /v1/sessions has no session_id or stream_url",
+                Body = parsed,
+            });
+        }
+        return new Session(this, raw);
+    }
+
+    /// <summary>
+    /// Runs every check <see cref="OpenSessionAsync(SessionOptions, CancellationToken)"/> runs
+    /// before sending, held <c>/v1/models</c> limits included, and throws exactly what it would
+    /// throw. Sends nothing; returns when the open would be sent.
+    /// </summary>
+    /// <exception cref="ArgumentException">No questions, or a value that cannot be serialised.</exception>
+    /// <exception cref="BadRequestError">A fixed rule is broken (with the API's <c>error_type</c>).</exception>
+    /// <exception cref="ValidationError">A rule the API answers with <c>422</c> is broken, with the server's entries.</exception>
+    public void CheckRequest(SessionOptions session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        _ = OpenBody(session.State, session.Questions, session.Instructions, session.Model, session.Window, session.TtlSeconds);
+    }
+
+    /// <summary>The open body, checked by every fixed rule.</summary>
+    private JsonObject OpenBody(object? state, IReadOnlyDictionary<string, Question> questions, object? instructions, string? model, int? window, int? ttlSeconds)
+    {
         var qs = QuestionMap(questions, nameof(questions));
         var body = new JsonObject { ["model"] = NonEmpty(model) ?? Model };
         if (instructions is not null)
@@ -53,18 +85,7 @@ public sealed partial class DecisionNodeClient
             body["ttl_seconds"] = ttl;
         }
         LocalChecks.SessionOpen(body, Held(model));
-        var (parsed, result) = await SendJsonAsync(HttpMethod.Post, "/v1/sessions", JsonValues.ToUtf8(body), JsonContentType, RetryPolicy.SessionOpen, cancellationToken).ConfigureAwait(false);
-        if (parsed is not JsonObject raw || JsonValues.AsString(raw["session_id"]) is null || JsonValues.AsString(raw["stream_url"]) is null)
-        {
-            throw new ServerError(new ErrorDetails
-            {
-                Status = result.Status,
-                RequestId = result.Header("x-request-id"),
-                Message = "the response of POST /v1/sessions has no session_id or stream_url",
-                Body = parsed,
-            });
-        }
-        return new Session(this, raw);
+        return body;
     }
 
     /// <summary>Opens a session described by <paramref name="options"/>.</summary>
@@ -740,17 +761,7 @@ public sealed class Session : IAsyncDisposable
     {
         var socket = _socket ?? throw new InvalidOperationException("connect the session before sending");
         // The frame's fixed rules, before anything is written: a refused frame takes no seq.
-        var frameNode = frame is null ? null : JsonValues.ToNode(frame, "the frame");
-        var asked = questions?.ToList();
-        LocalChecks.Frame(seq, frameNode, image is not null, asked, Questions);
-        if (image is not null)
-        {
-            if (image.Url is not null)
-            {
-                throw LocalChecks.BadRequest("image: a frame takes bytes or an upload, not a url.", "api_usage_error");
-            }
-            LocalChecks.One(image, _client.Held(Model));
-        }
+        var (frameNode, asked) = CheckFrameCore(frame, image, questions, seq);
         var number = seq ?? Interlocked.Increment(ref _seq);
         var message = new JsonObject { ["seq"] = number };
         if (frameNode is not null)
@@ -788,6 +799,42 @@ public sealed class Session : IAsyncDisposable
             _sendLock.Release();
         }
         return number;
+    }
+
+    /// <summary>
+    /// Runs every check <see cref="SendAsync(SessionFrame, CancellationToken)"/> runs before
+    /// writing a frame, held limits included, and throws exactly what it would throw. Writes
+    /// and uploads nothing and uses no <c>seq</c>; returns when the frame would be sent.
+    /// Needs no connection.
+    /// </summary>
+    /// <exception cref="BadRequestError">The frame breaks a fixed rule (<c>api_usage_error</c>).</exception>
+    public void CheckFrame(SessionFrame frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        CheckFrame(frame.Frame, frame.Image, frame.Questions, frame.Reset, frame.Seq);
+    }
+
+    /// <summary>Checks one frame. As <see cref="CheckFrame(SessionFrame)"/>.</summary>
+    public void CheckFrame(object? frame = null, Image? image = null, IEnumerable<string>? questions = null, bool? reset = null, long? seq = null)
+    {
+        _ = reset; // a bool? is always of the type the API takes
+        _ = CheckFrameCore(frame, image, questions, seq);
+    }
+
+    private (JsonNode? Frame, List<string>? Questions) CheckFrameCore(object? frame, Image? image, IEnumerable<string>? questions, long? seq)
+    {
+        var frameNode = frame is null ? null : JsonValues.ToNode(frame, "the frame");
+        var asked = questions?.ToList();
+        LocalChecks.Frame(seq, frameNode, image is not null, asked, Questions);
+        if (image is not null)
+        {
+            if (image.Url is not null)
+            {
+                throw LocalChecks.BadRequest("image: a frame takes bytes or an upload, not a url.", "api_usage_error");
+            }
+            LocalChecks.One(image, _client.Held(Model));
+        }
+        return (frameNode, asked);
     }
 
     /// <summary>

@@ -54,6 +54,9 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>The default time allowed for each attempt.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>The default time allowed for each attempt of an image's storage <c>PUT</c>, apart from <see cref="DefaultTimeout"/>.</summary>
+    public static readonly TimeSpan DefaultUploadTimeout = TimeSpan.FromSeconds(60);
+
     private const string UserAgent = "decisionnode-dotnet/" + Version;
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(8);
 
@@ -84,6 +87,11 @@ public sealed partial class DecisionNodeClient : IDisposable
         if (MaxRetries < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options), MaxRetries, "MaxRetries must be 0 or more.");
+        }
+        UploadTimeout = options.UploadTimeout ?? DefaultUploadTimeout;
+        if (UploadTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), UploadTimeout, "UploadTimeout must be above zero.");
         }
         InlineThreshold = options.InlineThreshold ?? DefaultInlineThreshold;
         if (InlineThreshold < 0)
@@ -277,10 +285,12 @@ public sealed partial class DecisionNodeClient : IDisposable
         int? maxRetries = null,
         IDictionary<string, string>? headers = null,
         HttpClient? httpClient = null,
-        int? inlineThreshold = null)
+        int? inlineThreshold = null,
+        TimeSpan? uploadTimeout = null)
         : this(new DecisionNodeClientOptions
         {
             InlineThreshold = inlineThreshold,
+            UploadTimeout = uploadTimeout,
             ApiKey = apiKey,
             BaseUrl = baseUrl,
             Model = model,
@@ -303,6 +313,9 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     /// <summary>Retries after the first attempt.</summary>
     public int MaxRetries { get; }
+
+    /// <summary>The time allowed for each attempt of an image's storage <c>PUT</c>.</summary>
+    public TimeSpan UploadTimeout { get; }
 
     /// <summary>The inline threshold in use, in bytes (see <see cref="DefaultInlineThreshold"/>).</summary>
     public int InlineThreshold { get; }
@@ -339,6 +352,32 @@ public sealed partial class DecisionNodeClient : IDisposable
     {
         var request = Prepare(state, questions, images, model, systemOne: false);
         return SendDecisionAsync(DecidePath, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs every check <see cref="DecideAsync(DecideRequest, CancellationToken)"/> runs before
+    /// sending (the fixed rules of the questions, the state and the images, held
+    /// <c>/v1/models</c> limits included) and throws exactly what it would throw. Sends and
+    /// uploads nothing; returns when the request would be sent. The helpers
+    /// (<see cref="CheckAsync"/> and the others) send <c>decide</c> requests and are checked the same way.
+    /// </summary>
+    /// <exception cref="ArgumentException">No questions, or a value that cannot be serialised.</exception>
+    /// <exception cref="BadRequestError">A fixed rule is broken (with the API's <c>error_type</c>).</exception>
+    /// <exception cref="ValidationError">A rule the API answers with <c>422</c> is broken, with the server's entries.</exception>
+    public void CheckRequest(DecideRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        _ = Prepare(request.State, request.Questions, request.Images, request.Model, systemOne: false);
+    }
+
+    /// <summary>
+    /// Runs every check <see cref="SystemoneAsync"/> runs before sending, on the strict
+    /// path's rules, and throws exactly what it would throw. Sends and uploads nothing.
+    /// </summary>
+    public void CheckSystemoneRequest(DecideRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        _ = Prepare(request.State, request.Questions, request.Images, request.Model, systemOne: true);
     }
 
     /// <summary>Sends one decision described by a <see cref="DecideRequest"/>.</summary>
@@ -562,8 +601,22 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     private volatile Dictionary<string, JsonObject> _held = new(StringComparer.Ordinal);
 
-    /// <summary>The <c>/v1/models</c> entry of a model, when this client holds it from an earlier <see cref="ModelsAsync"/>.</summary>
-    internal JsonObject? Held(string? model) => _held.TryGetValue(NonEmpty(model) ?? Model, out var entry) ? entry : null;
+    /// <summary>
+    /// The <c>/v1/models</c> entry of a model, when this client holds it from an earlier
+    /// <see cref="ModelsAsync"/>: the entry of that name, else the entry that states the name
+    /// as its <c>alias</c> or its pinned <c>version</c>. A name the list does not state holds
+    /// nothing, so its checks are left to the server.
+    /// </summary>
+    internal JsonObject? Held(string? model)
+    {
+        var name = NonEmpty(model) ?? Model;
+        var held = _held;
+        if (held.TryGetValue(name, out var entry))
+        {
+            return entry;
+        }
+        return held.Values.FirstOrDefault(m => JsonValues.AsString(m["alias"]) == name || JsonValues.AsString(m["version"]) == name);
+    }
 
     /// <summary>
     /// Sends <paramref name="body"/> to <c>POST /v1/decide</c> exactly as given and returns

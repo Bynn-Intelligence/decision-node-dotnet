@@ -342,7 +342,7 @@ public sealed partial class DecisionNodeClient
                     }
                 }
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(Timeout);
+                timeout.CancelAfter(UploadTimeout);
                 try
                 {
                     using var response = await Storage.SendAsync(request, timeout.Token).ConfigureAwait(false);
