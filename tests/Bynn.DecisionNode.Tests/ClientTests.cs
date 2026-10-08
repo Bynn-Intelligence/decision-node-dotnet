@@ -65,11 +65,12 @@ public class ClientTests
         using var dn = Client(stub);
         await dn.DecideAsync("", OneTruth(), new[]
         {
-            Image.FromBytes("a", new byte[] { 1, 2, 3 }, "image/png"),
+            Image.FromBytes("a", Fixtures.Read("rgb-7x3.png"), "image/png"),
             Image.FromUrl("b", "https://example.com/r.jpg"),
         });
         var images = Assert.Single(stub.Requests).Json!["images"]!.ToJsonString();
-        Assert.Equal("""[{"id":"a","media_type":"image/png","data":"AQID"},{"id":"b","url":"https://example.com/r.jpg"}]""", images);
+        var data = Convert.ToBase64String(Fixtures.Read("rgb-7x3.png"));
+        Assert.Equal($$"""[{"id":"a","media_type":"image/png","data":"{{data}}"},{"id":"b","url":"https://example.com/r.jpg"}]""", images);
     }
 
     [Fact]
@@ -165,9 +166,10 @@ public class ClientTests
     }
 
     [Fact]
-    public void SpecVersionIsOnePointZero()
+    public void SpecVersionIsOnePointOne()
     {
-        Assert.Equal("1.0", DecisionNodeClient.SpecVersion);
+        Assert.Equal("1.1", DecisionNodeClient.SpecVersion);
+        Assert.Equal(524288, DecisionNodeClient.DefaultInlineThreshold);
     }
 
     [Fact]
