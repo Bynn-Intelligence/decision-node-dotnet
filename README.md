@@ -142,7 +142,20 @@ Then the library picks the fastest way to send them. When the request's local im
 
 Uploads are remembered by content in the client's memory (at most 256, least recently used out first) until 5 minutes before they expire, so an image you send again, in a later call, in `DecideManyAsync` or in a session frame, goes by its `upload_id` whatever its size. If the server answers that an upload the library placed has expired or was used up, the library uploads it again and sends the request once more. `UploadAsync(images)` uploads up to 16 images whatever their size and returns each `upload_id`, which any key of the workspace can name for an hour.
 
-Text in the state or the instructions can refer to an image by its id.
+### Referring to images and videos
+
+The model sees each image as "Picture 1", "Picture 2", ... with its id beside it, numbered from 1 in the order of `images`, and each video as "Video 1", "Video 2", ... in the order of `videos`, numbered separately. Text in the state, the instructions or a criterion can refer to an image by position ("Picture 2", "image 2", "the second image", "the last image") or by its id ("the receipt", "`receipt`"), and to a video the same way ("Video 1" or its id).
+
+```csharp
+var d = await dn.DecideAsync(
+    state: "Expense claim 4411.",
+    questions: new Dictionary<string, Question> { ["charged"] = Truth("Does the total in Picture 1 match the charge on the statement?") },
+    images: new[]
+    {
+        Image.FromUrl("receipt", "https://files.example.com/claims/4411/receipt.jpg"),
+        Image.FromUrl("statement", "https://files.example.com/claims/4411/statement.png"),
+    });
+```
 
 ## Points and boxes
 
@@ -175,7 +188,7 @@ Console.WriteLine(d.Truth("any_damage").Truth);
 | `Confidence` | The probability that the place is right if the thing is there: for a point, that it lies on the thing; for a box, that it overlaps the true box by an intersection over union of 0.5 or more |
 | `Image`, `Width`, `Height` | The image looked in and its size in pixels, so the answer can be drawn without another lookup |
 
-Coordinates are whole pixels of the image as sent (after its EXIF orientation), or fractions of the width and height from 0 to 1 with `units: "normalized"`. Every number is as received. `image` names the image to look in and is needed when the request carries two or more images; with one image it can be left out.
+Coordinates are whole pixels of the image as sent (after its EXIF orientation), or fractions of the width and height from 0 to 1 with `units: "normalized"`. Every number is as received. `image` names the image to look in by its id, a string, and is needed when the request carries two or more images; with one image it can be left out. A reference by number ("Picture 2") goes in the instructions.
 
 Before anything is sent the library checks that the request carries an image, that `image` names one of the request's images (a video's id is not an image's), that `units` is `pixels` or `normalized`, and that the question has instructions. A fault throws the `ValidationError` the API would answer, with every fault of the request in its `Entries`, or the `BadRequestError` for missing instructions. Points and boxes go with `DecideAsync`, `DecideManyAsync` and batch lines.
 

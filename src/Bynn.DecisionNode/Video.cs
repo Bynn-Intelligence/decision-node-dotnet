@@ -5,8 +5,10 @@ namespace Bynn.DecisionNode;
 
 /// <summary>
 /// A video sent beside the state, as the frames you sampled, each with its time. Every
-/// question in the request sees every video, the images and the state, and text in the state
-/// or the instructions can refer to the video by its <see cref="Id"/>.
+/// question in the request sees every video, the images and the state. The model sees the
+/// video as "Video 1", "Video 2", ... by its place in the request's videos, from 1, with its
+/// <see cref="Id"/> beside it, so text in the state or the instructions can refer to it by
+/// either.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -184,7 +184,7 @@ public sealed class Question
     /// with the probability that the thing is there at all and how sure the place is.
     /// </summary>
     /// <param name="instructions">What to find: a phrase, a description with conditions, or a question. Required by the API.</param>
-    /// <param name="image">The id of the image to look in; required when the request carries two or more images. Left out when <c>null</c>.</param>
+    /// <param name="image">The id of the image to look in, a string; required when the request carries two or more images. Left out when <c>null</c>. A reference by number ("Picture 2") goes in the instructions.</param>
     /// <param name="units"><c>pixels</c> (the default) or <c>normalized</c> (fractions of the width and height). Left out when <c>null</c>.</param>
     public static Question Point(object? instructions, string? image = null, string? units = null) =>
         Place("point", instructions, image, units);
@@ -195,7 +195,7 @@ public sealed class Question
     /// sure the box is.
     /// </summary>
     /// <param name="instructions">What to find: a phrase, a description with conditions, or a question. Required by the API.</param>
-    /// <param name="image">The id of the image to look in; required when the request carries two or more images. Left out when <c>null</c>.</param>
+    /// <param name="image">The id of the image to look in, a string; required when the request carries two or more images. Left out when <c>null</c>. A reference by number ("Picture 2") goes in the instructions.</param>
     /// <param name="units"><c>pixels</c> (the default) or <c>normalized</c> (fractions of the width and height). Left out when <c>null</c>.</param>
     public static Question Box(object? instructions, string? image = null, string? units = null) =>
         Place("box", instructions, image, units);

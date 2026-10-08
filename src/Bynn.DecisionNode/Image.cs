@@ -5,8 +5,10 @@ using Bynn.DecisionNode.Internal;
 namespace Bynn.DecisionNode;
 
 /// <summary>
-/// An image sent beside the state. Every question in the request can see it, and text in
-/// the state or the instructions can refer to it by its <see cref="Id"/>.
+/// An image sent beside the state. Every question in the request can see it. The model sees
+/// it as "Picture 1", "Picture 2", ... by its place in the request's images, from 1, with its
+/// <see cref="Id"/> beside it, so text in the state or the instructions can refer to it by
+/// either.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -44,7 +46,10 @@ public sealed class Image
         }
     }
 
-    /// <summary>The image's id, unique within a request.</summary>
+    /// <summary>
+    /// The image's id, unique within a request. The model sees it beside the image's number
+    /// ("Picture 1" for the first image), so text can refer to the image by either.
+    /// </summary>
     public string Id { get; }
 
     /// <summary>The image bytes, or <c>null</c> for an image given by URL or by upload id.</summary>
