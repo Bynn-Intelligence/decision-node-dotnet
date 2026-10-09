@@ -13,7 +13,7 @@ namespace Bynn.DecisionNode;
 /// <remarks>
 /// A name converts implicitly (<c>"age"</c> is sent as <c>"age"</c>); <see cref="Of"/> builds
 /// the object form, <c>{"name", "images"?, "require"?, "options"?}</c>, with each argument
-/// left out when not given; <see cref="FromJson(JsonNode)"/> takes the wire form itself. Names
+/// left out when not given, and with no argument but the name it is the name alone; <see cref="FromJson(JsonNode)"/> takes the wire form itself. Names
 /// are not a closed list, so a booster added on the server works with this version, and the
 /// library checks nothing about boosters before sending: the API answers an unknown name, a
 /// booster turned off for the workspace or a malformed list before any booster runs and before
@@ -55,7 +55,10 @@ public sealed class Booster
         return new Booster(JsonValue.Create(name));
     }
 
-    /// <summary>A booster in its object form.</summary>
+    /// <summary>
+    /// A booster in its object form, or the name alone when no other argument is given, so a
+    /// list of boosters without settings goes out as a plain list of names.
+    /// </summary>
     /// <param name="name">The booster's name, for example <c>age</c> or <c>ai_generated</c>.</param>
     /// <param name="images">The ids of the request's images it reads. Left out when <c>null</c>: it reads every image of the request.</param>
     /// <param name="require">
@@ -67,6 +70,10 @@ public sealed class Booster
     public static Booster Of(string name, IEnumerable<string>? images = null, bool? require = null, object? options = null)
     {
         ArgumentNullException.ThrowIfNull(name);
+        if (images is null && require is null && options is null)
+        {
+            return Named(name);
+        }
         var wire = new JsonObject { ["name"] = name };
         if (images is not null)
         {
@@ -163,6 +170,7 @@ public sealed class Evidence
         Version = JsonValues.AsString(obj?["version"]);
         Status = JsonValues.AsString(obj?["status"]);
         LatencyMs = JsonValues.TryDouble(obj?["latency_ms"], out var ms) ? ms : null;
+        BilledCalls = JsonValues.AsLong(obj?["billed_calls"]);
         var results = new List<Reading>();
         if (obj?["results"] is JsonArray list)
         {
@@ -185,6 +193,12 @@ public sealed class Evidence
 
     /// <summary>How long the booster took, in milliseconds, as received.</summary>
     public double? LatencyMs { get; }
+
+    /// <summary>
+    /// The calls of this booster billed on this request; <c>null</c> when the server did not
+    /// send it. A picture the same booster read for the workspace in the last hour is not billed again.
+    /// </summary>
+    public long? BilledCalls { get; }
 
     /// <summary>One reading per image read. Empty unless <see cref="Status"/> is <c>ok</c>.</summary>
     public IReadOnlyList<Reading> Results { get; }

@@ -9,7 +9,7 @@ public class SpecOneThreeTests
     private const string BoostedBody = """
         {"model":"decisionnode-1.0","answers":{"adult":{"type":"truth","truth":0.97}},
          "evidence":{
-           "age":{"version":"age-v3","status":"ok","latency_ms":212,"results":[
+           "age":{"version":"age-v3","status":"ok","latency_ms":212,"billed_calls":1,"results":[
              {"image":"a1b2","age_years":27,"low":22,"high":33,"confidence":0.81,"faces":1},
              {"image":"c3d4","faces":0}]},
            "ai_generated":{"version":"ai_generated-v2","status":"ok","latency_ms":340,"results":[
@@ -48,7 +48,7 @@ public class SpecOneThreeTests
         });
         var body = Assert.Single(stub.Requests).Json!;
         Assert.Equal(
-            """["age",{"name":"ai_generated","images":["c3d4"],"require":true},{"name":"later","options":{"level":2}},{"name":"bare"},{"name":"raw","require":false},"named"]""",
+            """["age",{"name":"ai_generated","images":["c3d4"],"require":true},{"name":"later","options":{"level":2}},"bare",{"name":"raw","require":false},"named"]""",
             body["boosters"]!.ToJsonString());
     }
 
@@ -134,6 +134,8 @@ public class SpecOneThreeTests
         Assert.Equal("age-v3", age.Version);
         Assert.Equal("ok", age.Status);
         Assert.Equal(212, age.LatencyMs);
+        Assert.Equal(1, age.BilledCalls);
+        Assert.Null(d.Evidence["ai_generated"].BilledCalls);
         var first = Assert.IsType<AgeReading>(age.Results[0]);
         Assert.Equal(("a1b2", 1L, 27L, 22L, 33L, 0.81), (first.Image, first.Faces, first.AgeYears, first.Low, first.High, first.Confidence));
         var noFace = Assert.IsType<AgeReading>(age.Results[1]);
@@ -337,7 +339,8 @@ public class SpecOneThreeTests
         Assert.Equal("ai_generated", Booster.Of(Booster.AiGenerated, require: true).Name);
         Assert.Equal("""{"name":"x"}""", Booster.FromObject(new Dictionary<string, object> { ["name"] = "x" }).ToJson().ToJsonString());
         Assert.Equal("x", Booster.FromObject(new Dictionary<string, object> { ["name"] = "x" }).Name);
-        Assert.Equal("""{"name":"bare"}""", Booster.Of("bare").ToString());
+        Assert.Equal("\"bare\"", Booster.Of("bare").ToString());
+        Assert.Equal("bare", Booster.Of("bare").Name);
         Assert.Throws<ArgumentNullException>(() => Booster.Of(null!));
     }
 }

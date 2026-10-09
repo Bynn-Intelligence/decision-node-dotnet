@@ -703,6 +703,7 @@ public static class Driver
                 ["version"] = e.Version,
                 ["status"] = e.Status,
                 ["latency_ms"] = e.LatencyMs,
+                ["billed_calls"] = e.BilledCalls,
                 ["results"] = new JsonArray(e.Results.Select(r => (JsonNode?)Reading(r)).ToArray()),
             };
         }
