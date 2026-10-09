@@ -343,6 +343,8 @@ public sealed class BatchesClient
                 body.Remove(key);
                 line[key] = value;
             }
+            // Each line as it would be sent, within the API's body limit.
+            _client.CheckBodySize(line, images);
             prepared.Add((line, images));
         }
         return prepared;

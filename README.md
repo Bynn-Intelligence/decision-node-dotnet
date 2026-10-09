@@ -140,6 +140,8 @@ Local bytes are checked on your machine before any request: JPEG, PNG or WebP by
 
 Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect. A `PUT` refused because its URL's five minutes ran out is presigned again once. Each `PUT` attempt has its own timeout, `uploadTimeout` (60 seconds by default), apart from the API's `timeout`.
 
+A request body may be at most 25 MiB (`DecisionNodeClient.MaxBodyBytes`, 26,214,400 bytes). Inline images and video frames count toward it; uploaded images and URLs do not, so a request whose large images are uploaded stays far under it. The library measures each body as it would be sent (each batch line on its own) and throws `RequestTooLargeError` before anything is sent or uploaded when it is over; the API's own `413` is the same class. `DecideRawAsync` sends its body as given.
+
 Uploads are remembered by content in the client's memory (at most 256, least recently used out first) until 5 minutes before they expire, so an image you send again, in a later call, in `DecideManyAsync` or in a session frame, goes by its `upload_id` whatever its size. If the server answers that an upload the library placed has expired or was used up, the library uploads it again and sends the request once more. `UploadAsync(images)` uploads up to 16 images whatever their size and returns each `upload_id`, which any key of the workspace can name for an hour.
 
 ### Referring to images and videos
@@ -406,6 +408,7 @@ Every error derives from `DecisionNodeError` (catch that name to catch them all)
 | 402 | `InsufficientCreditError` | |
 | 403 | `RefusalError` for a refusal, else `PermissionDeniedError` (a booster turned off for the workspace, a suspended workspace) | `Category` (`harm` or `self_harm`), `Safety` |
 | 404 | `NotFoundError` | |
+| 413, or a body over 25 MiB found before sending | `RequestTooLargeError`, never retried | |
 | 422 | `ValidationError` | `Entries` |
 | 429 | `RateLimitError`; `SessionLimitError` for a session limit | `RetryAfter` |
 | 529 | `OverloadedError`, `booster_unavailable` included | `RetryAfter` |

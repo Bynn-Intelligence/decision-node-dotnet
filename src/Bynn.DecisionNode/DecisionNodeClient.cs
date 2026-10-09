@@ -42,6 +42,14 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// </summary>
     public const int DefaultInlineThreshold = 524288;
 
+    /// <summary>
+    /// The API's request body limit, 26,214,400 bytes (25 MiB). Inline images and video frames
+    /// count toward it; uploaded images and image URLs do not. A body over it is refused with a
+    /// <see cref="RequestTooLargeError"/> before anything is sent, so large images belong in
+    /// uploads (any local image at or above <see cref="DefaultInlineThreshold"/> is uploaded).
+    /// </summary>
+    public const int MaxBodyBytes = 26_214_400;
+
     /// <summary>The API's default root URL.</summary>
     public const string DefaultBaseUrl = "https://api.decisionnode.com";
 
@@ -345,6 +353,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <param name="cancellationToken">Cancels the call, retries included.</param>
     /// <exception cref="ArgumentException">No questions, or a value that cannot be serialised; nothing is sent.</exception>
     /// <exception cref="BadRequestError">The request breaks a fixed rule of the API (an image, a video, a question's limits), found before anything is sent.</exception>
+    /// <exception cref="RequestTooLargeError">The body would be over <see cref="MaxBodyBytes"/>, found before anything is sent; or the API's 413.</exception>
     public Task<Decision> DecideAsync(
         object? state,
         IReadOnlyDictionary<string, Question> questions,
@@ -368,6 +377,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <exception cref="ArgumentException">No questions, or a value that cannot be serialised.</exception>
     /// <exception cref="BadRequestError">A fixed rule is broken (with the API's <c>error_type</c>).</exception>
     /// <exception cref="ValidationError">A rule the API answers with <c>422</c> is broken, with the server's entries.</exception>
+    /// <exception cref="RequestTooLargeError">The body would be over <see cref="MaxBodyBytes"/>.</exception>
     public void CheckRequest(DecideRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -673,6 +683,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         LocalChecks.Request(body, list.Select(i => i.Id).ToList(), held, entriesAfter: LocalChecks.CountEntries(list, videoList, held));
         LocalChecks.Images(list, held);
         LocalChecks.Videos(videoList, list.Select(i => i.Id));
+        CheckBodySize(body, list);
         return new PreparedRequest(body, list);
     }
 
@@ -1092,6 +1103,7 @@ public sealed partial class DecisionNodeClient : IDisposable
             403 when errorType == "refusal_error" => new RefusalError(details, category, Safety.Parse(header("x-decisionnode-safety"))),
             403 => new PermissionDeniedError(details),
             404 => new NotFoundError(details),
+            413 => new RequestTooLargeError(details),
             422 => new ValidationError(details, entries),
             429 when errorType == "session_limit_exceeded" => new SessionLimitError(details, RetryWait(header)),
             429 => new RateLimitError(details, RetryWait(header)),

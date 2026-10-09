@@ -108,6 +108,17 @@ public class RefusalError : DecisionNodeError
     public Safety? Safety { get; }
 }
 
+/// <summary>
+/// 413: the request body is over the API's limit of
+/// <see cref="DecisionNodeClient.MaxBodyBytes"/> (26,214,400 bytes, 25 MiB). Also thrown before
+/// anything is sent, with no status and no request id, for a body the client can tell is over
+/// it. Never retried: send large images as uploads and name them by upload id.
+/// </summary>
+public class RequestTooLargeError : DecisionNodeError
+{
+    internal RequestTooLargeError(ErrorDetails d) : base(d) { }
+}
+
 /// <summary>404.</summary>
 public class NotFoundError : DecisionNodeError
 {

@@ -133,7 +133,42 @@ public sealed partial class DecisionNodeClient
         {
             return (null, placed);
         }
-        var wires = new JsonObject[images.Count];
+        var (wires, upload) = PlanImages(images, placed);
+        if (upload.Count > 0)
+        {
+            var ids = await UploadSharedAsync(upload.Select(i => images[i]).ToList(), ct).ConfigureAwait(false);
+            for (var k = 0; k < upload.Count; k++)
+            {
+                wires[upload[k]] = new JsonObject { ["id"] = images[upload[k]].Id, ["upload_id"] = ids[k] };
+                placed.Add(ids[k]);
+            }
+        }
+        return (new JsonArray(wires.Select(w => (JsonNode?)w).ToArray()), placed);
+    }
+
+    /// <summary>
+    /// The images' wire forms as <see cref="PlaceImagesAsync"/> would send them, with nothing
+    /// uploaded: an image it would upload is named by a placeholder id of a real id's length,
+    /// so the body can be measured against the API's limit before anything is sent.
+    /// </summary>
+    internal JsonArray ProjectImages(IReadOnlyList<Image> images)
+    {
+        var (wires, upload) = PlanImages(images, new List<string>());
+        foreach (var i in upload)
+        {
+            wires[i] = new JsonObject { ["id"] = images[i].Id, ["upload_id"] = LocalChecks.UploadIdPlaceholder };
+        }
+        return new JsonArray(wires.Select(w => (JsonNode?)w).ToArray());
+    }
+
+    /// <summary>
+    /// Every image's wire form except the ones to upload, whose indexes are returned: URLs and
+    /// upload ids as given, a cached image by its upload id (added to <paramref name="placed"/>),
+    /// and the other local bytes inline when they total under the threshold.
+    /// </summary>
+    private (JsonObject?[] Wires, List<int> Upload) PlanImages(IReadOnlyList<Image> images, List<string> placed)
+    {
+        var wires = new JsonObject?[images.Count];
         var local = new List<int>();
         long total = 0;
         var now = UtcNow();
@@ -158,21 +193,40 @@ public sealed partial class DecisionNodeClient
         }
         if (local.Count > 0 && total >= InlineThreshold)
         {
-            var ids = await UploadSharedAsync(local.Select(i => images[i]).ToList(), ct).ConfigureAwait(false);
-            for (var k = 0; k < local.Count; k++)
-            {
-                wires[local[k]] = new JsonObject { ["id"] = images[local[k]].Id, ["upload_id"] = ids[k] };
-                placed.Add(ids[k]);
-            }
+            return (wires, local);
         }
-        else
+        foreach (var i in local)
         {
-            foreach (var i in local)
+            wires[i] = images[i].ToJson();
+        }
+        return (wires, new List<int>());
+    }
+
+    /// <summary>
+    /// Checks a body against the API's limit as it would be sent: its images projected by
+    /// <see cref="ProjectImages"/>, its videos and boosters as they are. The body is left as it was.
+    /// </summary>
+    internal void CheckBodySize(JsonObject body, IReadOnlyList<Image> images)
+    {
+        if (images.Count == 0)
+        {
+            LocalChecks.BodySize(body);
+            return;
+        }
+        body.Remove("images", out var before);
+        SetImages(body, ProjectImages(images));
+        try
+        {
+            LocalChecks.BodySize(body);
+        }
+        finally
+        {
+            body.Remove("images");
+            if (before is not null)
             {
-                wires[i] = images[i].ToJson();
+                SetImages(body, (JsonArray)before);
             }
         }
-        return (new JsonArray(wires.Select(w => (JsonNode?)w).ToArray()), placed);
     }
 
     /// <summary>

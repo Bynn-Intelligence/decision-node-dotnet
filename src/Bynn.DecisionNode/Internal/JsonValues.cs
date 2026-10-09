@@ -69,6 +69,51 @@ internal static class JsonValues
         return buffer.ToArray();
     }
 
+    /// <summary>The length in bytes of a node as <see cref="ToUtf8"/> writes it, without holding the bytes.</summary>
+    internal static long Utf8Length(JsonNode node)
+    {
+        using var counter = new CountingStream();
+        using (var writer = new Utf8JsonWriter(counter, WriterOptions))
+        {
+            node.WriteTo(writer, Options);
+        }
+        return counter.Length;
+    }
+
+    /// <summary>A write-only stream that keeps only the count of the bytes written to it.</summary>
+    private sealed class CountingStream : Stream
+    {
+        private long _length;
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => _length;
+
+        public override long Position
+        {
+            get => _length;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override void Write(byte[] buffer, int offset, int count) => _length += count;
+
+        public override void Write(ReadOnlySpan<byte> buffer) => _length += buffer.Length;
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
     internal static string? AsString(JsonNode? node) =>
         node is JsonValue v && v.GetValueKind() == JsonValueKind.String ? v.GetValue<string>() : null;
 

@@ -35,6 +35,12 @@ internal static class LocalChecks
     internal const long MaxSeq = 9007199254740991;
     internal const int MaxListLimit = 100;
     internal const int MaxCustomIdChars = 512;
+
+    /// <summary>
+    /// The id a local image that would be uploaded is named by when a body is measured before
+    /// anything is sent: the length of a real upload id.
+    /// </summary>
+    internal const string UploadIdPlaceholder = "upl_00000000000000000000000000000000";
     private const decimal TwoTo53 = 9007199254740992m;
     private const int MaxNumberDecimals = 6;
 
@@ -449,6 +455,25 @@ internal static class LocalChecks
             }
         }
         return deepest;
+    }
+
+    /// <summary>
+    /// The API's body limit on the encoded body as it would be sent: over
+    /// <see cref="DecisionNodeClient.MaxBodyBytes"/> is the <c>413</c> the server would answer,
+    /// raised before anything is sent or uploaded.
+    /// </summary>
+    internal static void BodySize(JsonNode body)
+    {
+        var size = JsonValues.Utf8Length(body);
+        if (size > DecisionNodeClient.MaxBodyBytes)
+        {
+            throw new RequestTooLargeError(new ErrorDetails
+            {
+                Message = "The request body is over 26,214,400 bytes (25 MiB). Send large images as uploads (POST /v1/uploads) and name them by upload_id.",
+                ErrorType = "request_too_large_error",
+                Reason = $"the body is {size} bytes; the limit is {DecisionNodeClient.MaxBodyBytes}",
+            });
+        }
     }
 
     private static void Nesting(int depth)
