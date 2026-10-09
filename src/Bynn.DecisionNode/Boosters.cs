@@ -201,7 +201,11 @@ public sealed class Evidence
     /// </summary>
     public long? BilledCalls { get; }
 
-    /// <summary>One reading per image read. Empty unless <see cref="Status"/> is <c>ok</c>.</summary>
+    /// <summary>
+    /// One entry per picture. A picture the booster did not read (it timed out or failed, or could
+    /// not decode the picture) is an <see cref="UnknownReading"/> holding only its image, the
+    /// <see cref="Status"/> saying why.
+    /// </summary>
     public IReadOnlyList<Reading> Results { get; }
 
     /// <summary>The entry exactly as received.</summary>
