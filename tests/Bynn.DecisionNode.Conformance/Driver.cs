@@ -149,13 +149,13 @@ public static class Driver
             "decide_many" => Wrap(client.DecideManyAsync(
                 ((JsonArray)args["requests"]!).Select(r => Request((JsonObject)r!, ctx)).ToList(),
                 args["concurrency"] is { } c ? (int)c : 8)),
-            "check" => Wrap(client.CheckAsync(State(args, ctx), Arg("instructions"), Arg("true"), Arg("false"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
+            "check" => Wrap(client.CheckAsync(State(args, ctx), Arg("instructions"), Arg("true"), Arg("false"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx), Fallback(args, ctx))),
             "classify" => args["options"] is JsonArray names
-                ? Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), names.Select(n => (string)n!).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx)))
-                : Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), Options((JsonObject)args["options"]!), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
-            "score" => Wrap(client.ScoreAsync(State(args, ctx), Arg("instructions"), ((JsonArray)args["levels"]!).Select(l => (object?)l?.DeepClone()).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
-            "number" => Wrap(client.NumberAsync(State(args, ctx), Arg("instructions"), Number("min"), Number("max"), Number("step"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
-            "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
+                ? Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), names.Select(n => (string)n!).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx), Fallback(args, ctx)))
+                : Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), Options((JsonObject)args["options"]!), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx), Fallback(args, ctx))),
+            "score" => Wrap(client.ScoreAsync(State(args, ctx), Arg("instructions"), ((JsonArray)args["levels"]!).Select(l => (object?)l?.DeepClone()).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx), Fallback(args, ctx))),
+            "number" => Wrap(client.NumberAsync(State(args, ctx), Arg("instructions"), Number("min"), Number("max"), Number("step"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx), Fallback(args, ctx))),
+            "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx), Fallback(args, ctx))),
             "models" => Wrap(client.ModelsAsync()),
             "decide_raw" => Wrap(client.DecideRawAsync(args["body"]!.DeepClone())),
             "upload" => Wrap(client.UploadAsync(Images(args, ctx)!)),
@@ -322,6 +322,7 @@ public static class Driver
         Videos = Videos(args, ctx),
         Model = (string?)args["model"],
         Boosters = Boosters(args, ctx),
+        Fallback = Fallback(args, ctx),
     };
 
     private static List<BatchRequest> BatchRequests(JsonObject args, Dictionary<string, object?> ctx) =>
@@ -338,6 +339,7 @@ public static class Driver
                 Videos = Videos(o, ctx),
                 Model = (string?)o["model"],
                 Boosters = Boosters(o, ctx),
+                Fallback = Fallback(o, ctx),
             };
         }).ToList();
 
@@ -420,6 +422,10 @@ public static class Driver
     /// whose <c>images</c> or <c>require</c> the typed <see cref="Booster.Of"/> cannot take is
     /// passed in its wire form, sent as given.
     /// </summary>
+    /// <summary>The <c>fallback</c> argument, passed only when the case gives it.</summary>
+    private static bool? Fallback(JsonObject args, Dictionary<string, object?> ctx) =>
+        Plain(args["fallback"], ctx) is { } f ? (bool)f : null;
+
     private static List<Booster>? Boosters(JsonObject args, Dictionary<string, object?> ctx) =>
         Plain(args["boosters"], ctx) is JsonArray list ? list.Select(b => BoosterOf(b!)).ToList() : null;
 
@@ -739,6 +745,7 @@ public static class Driver
         ["safety"] = Safety(d.Safety),
         ["answers"] = Answers(d.Answers),
         ["evidence"] = Evidence(d.Evidence),
+        ["fallback"] = d.Fallback is { } f ? new JsonObject { ["served_model"] = f.ServedModel, ["requested_model"] = f.RequestedModel } : null,
         ["raw"] = d.Raw.DeepClone(),
     };
 

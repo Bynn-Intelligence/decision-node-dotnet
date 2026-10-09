@@ -44,6 +44,9 @@ public sealed class Decision
         LatencyMs = double.TryParse(header("x-decisionnode-latency-ms"), NumberStyles.Float, CultureInfo.InvariantCulture, out var ms) ? ms : null;
         Safety = Safety.Parse(header("x-decisionnode-safety"));
         Evidence = Bynn.DecisionNode.Evidence.Parse(body["evidence"]);
+        Fallback = header("x-decisionnode-fallback") is { } served
+            ? new Fallback(served, header("x-decisionnode-requested-model"))
+            : null;
     }
 
     /// <summary>The answers, by question id.</summary>
@@ -85,6 +88,14 @@ public sealed class Decision
     /// <c>null</c> when the request named none.
     /// </summary>
     public IReadOnlyDictionary<string, Evidence>? Evidence { get; }
+
+    /// <summary>
+    /// <c>null</c> on an ordinary answer. When the model asked for had no ready worker and
+    /// another model answered instead, the model that answered and the one asked for, from the
+    /// <c>x-decisionnode-fallback</c> and <c>x-decisionnode-requested-model</c> headers.
+    /// <see cref="Model"/> is the model that answered either way.
+    /// </summary>
+    public Fallback? Fallback { get; }
 
     /// <summary>The parsed response body, including any field this version of the library does not know.</summary>
     public JsonObject Raw { get; }
@@ -201,6 +212,11 @@ public sealed class ModelInfo
     public JsonObject Raw { get; }
 }
 
+/// <summary>Which model answered a decision in place of the one asked for: <see cref="Decision.Fallback"/>.</summary>
+/// <param name="ServedModel">The model that answered, from <c>x-decisionnode-fallback</c>.</param>
+/// <param name="RequestedModel">The model the request asked for, from <c>x-decisionnode-requested-model</c>; <c>null</c> when the header is absent.</param>
+public sealed record Fallback(string ServedModel, string? RequestedModel);
+
 /// <summary>One request for <see cref="DecisionNodeClient.DecideManyAsync"/>, or for <see cref="DecisionNodeClient.DecideAsync(DecideRequest, CancellationToken)"/>.</summary>
 public sealed class DecideRequest
 {
@@ -221,6 +237,9 @@ public sealed class DecideRequest
 
     /// <summary>Boosters that read the request's images before the decision, up to 4, in order; none when <c>null</c> or empty.</summary>
     public IReadOnlyList<Booster>? Boosters { get; init; }
+
+    /// <summary><c>false</c>: no other model answers when the one asked for has no ready worker. Left out when <c>null</c>.</summary>
+    public bool? Fallback { get; init; }
 }
 
 /// <summary>The outcome of one request of <see cref="DecisionNodeClient.DecideManyAsync"/>: a decision or the error it ended with.</summary>

@@ -350,6 +350,11 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <param name="videos">Videos sent as frames beside the state, up to 4. Frames always go inline.</param>
     /// <param name="model">The model for this call, a fine-tuned model's name included; the client's model when <c>null</c> or empty.</param>
     /// <param name="boosters">Boosters that read the request's images before the decision, up to 4, in order. Their readings come back in <see cref="Decision.Evidence"/>.</param>
+    /// <param name="fallback">
+    /// <c>false</c>: no other model answers when the one asked for has no ready worker, and the
+    /// request gets an <see cref="OverloadedError"/> instead. Left out when <c>null</c>: the
+    /// server's default, which may answer with another model and says so in <see cref="Decision.Fallback"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the call, retries included.</param>
     /// <exception cref="ArgumentException">No questions, or a value that cannot be serialised; nothing is sent.</exception>
     /// <exception cref="BadRequestError">The request breaks a fixed rule of the API (an image, a video, a question's limits), found before anything is sent.</exception>
@@ -361,9 +366,10 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default)
     {
-        var request = Prepare(state, questions, images, videos, model, boosters);
+        var request = Prepare(state, questions, images, videos, model, boosters, fallback);
         return SendDecisionAsync(DecidePath, request, cancellationToken);
     }
 
@@ -381,14 +387,14 @@ public sealed partial class DecisionNodeClient : IDisposable
     public void CheckRequest(DecideRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model, request.Boosters);
+        _ = Prepare(request.State, request.Questions, request.Images, request.Videos, request.Model, request.Boosters, request.Fallback);
     }
 
     /// <summary>Sends one decision described by a <see cref="DecideRequest"/>.</summary>
     public Task<Decision> DecideAsync(DecideRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return DecideAsync(request.State, request.Questions, request.Images, request.Videos, request.Model, request.Boosters, cancellationToken);
+        return DecideAsync(request.State, request.Questions, request.Images, request.Videos, request.Model, request.Boosters, request.Fallback, cancellationToken);
     }
 
     /// <summary>
@@ -411,7 +417,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         var prepared = requests.Select(r =>
         {
             ArgumentNullException.ThrowIfNull(r, nameof(requests));
-            return Prepare(r.State, r.Questions, r.Images, r.Videos, r.Model, r.Boosters);
+            return Prepare(r.State, r.Questions, r.Images, r.Videos, r.Model, r.Boosters, r.Fallback);
         }).ToList();
         return DecideManyCoreAsync(prepared, concurrency, cancellationToken);
     }
@@ -450,9 +456,10 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default)
     {
-        var d = await DecideAsync(state, One("check", Question.Truth(instructions, ifTrue, ifFalse)), images, videos, model, boosters, cancellationToken).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("check", Question.Truth(instructions, ifTrue, ifFalse)), images, videos, model, boosters, fallback, cancellationToken).ConfigureAwait(false);
         return Single<TruthAnswer>(d, "check");
     }
 
@@ -465,8 +472,9 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default) =>
-        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, boosters, cancellationToken);
+        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, boosters, fallback, cancellationToken);
 
     /// <summary>Asks one choice question (id <c>classify</c>) with options mapped to descriptions.</summary>
     public Task<ChoiceAnswer> ClassifyAsync(
@@ -477,8 +485,9 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default) =>
-        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, boosters, cancellationToken);
+        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, boosters, fallback, cancellationToken);
 
     /// <summary>Asks one choice question (id <c>classify</c>) with options mapped to descriptions of any shape.</summary>
     public Task<ChoiceAnswer> ClassifyAsync(
@@ -489,12 +498,13 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default) =>
-        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, boosters, cancellationToken);
+        ClassifyCore(state, Question.Choice(instructions, options), images, videos, model, boosters, fallback, cancellationToken);
 
-    private async Task<ChoiceAnswer> ClassifyCore(object? state, Question q, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, IEnumerable<Booster>? boosters, CancellationToken ct)
+    private async Task<ChoiceAnswer> ClassifyCore(object? state, Question q, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, IEnumerable<Booster>? boosters, bool? fallback, CancellationToken ct)
     {
-        var d = await DecideAsync(state, One("classify", q), images, videos, model, boosters, ct).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("classify", q), images, videos, model, boosters, fallback, ct).ConfigureAwait(false);
         return Single<ChoiceAnswer>(d, "classify");
     }
 
@@ -507,9 +517,10 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default)
     {
-        var d = await DecideAsync(state, One("score", Question.Score(instructions, levels)), images, videos, model, boosters, cancellationToken).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("score", Question.Score(instructions, levels)), images, videos, model, boosters, fallback, cancellationToken).ConfigureAwait(false);
         return Single<ScoreAnswer>(d, "score");
     }
 
@@ -528,9 +539,10 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default)
     {
-        var d = await DecideAsync(state, One("number", Question.Number(instructions, min, max, step)), images, videos, model, boosters, cancellationToken).ConfigureAwait(false);
+        var d = await DecideAsync(state, One("number", Question.Number(instructions, min, max, step)), images, videos, model, boosters, fallback, cancellationToken).ConfigureAwait(false);
         return Single<NumberAnswer>(d, "number");
     }
 
@@ -547,6 +559,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         IEnumerable<Video>? videos = null,
         string? model = null,
         IEnumerable<Booster>? boosters = null,
+        bool? fallback = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -555,7 +568,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         {
             state["context"] = JsonValues.ToNode(context, "the context");
         }
-        return DecideAsync(state, GateQuestions(), images, videos, model, boosters, cancellationToken);
+        return DecideAsync(state, GateQuestions(), images, videos, model, boosters, fallback, cancellationToken);
     }
 
     /// <summary>The three questions <see cref="GateAsync"/> sends.</summary>
@@ -664,7 +677,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// Builds a decision body and checks it by the API's fixed rules, so a request the server
     /// would refuse fails here, before any network call.
     /// </summary>
-    private PreparedRequest Prepare(object? state, IReadOnlyDictionary<string, Question> questions, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, IEnumerable<Booster>? boosters)
+    private PreparedRequest Prepare(object? state, IReadOnlyDictionary<string, Question> questions, IEnumerable<Image>? images, IEnumerable<Video>? videos, string? model, IEnumerable<Booster>? boosters, bool? fallback)
     {
         var qs = QuestionMap(questions, nameof(questions));
         var list = ImageList(images, nameof(images));
@@ -679,6 +692,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         WithVideos(body, videoList);
         // Nothing about boosters is checked here; their list only counts toward the nesting limit.
         Booster.AddTo(body, boosterList);
+        WithFallback(body, fallback);
         var held = Held(model);
         LocalChecks.Request(body, list.Select(i => i.Id).ToList(), held, entriesAfter: LocalChecks.CountEntries(list, videoList, held));
         LocalChecks.Images(list, held);
@@ -733,6 +747,15 @@ public sealed partial class DecisionNodeClient : IDisposable
             }
         }
         return list;
+    }
+
+    /// <summary>Adds <c>fallback</c> to a body when it is given; left out, the server's default applies.</summary>
+    internal static void WithFallback(JsonObject body, bool? fallback)
+    {
+        if (fallback is { } f)
+        {
+            body["fallback"] = f;
+        }
     }
 
     /// <summary>Adds <c>videos</c> to a body when there are any; left out otherwise.</summary>

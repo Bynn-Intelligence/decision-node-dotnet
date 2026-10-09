@@ -77,17 +77,17 @@ Answers are read by question id: `d["route"]`, or typed with `d.Truth(id)`, `d.C
 
 | Method | Does |
 |---|---|
-| `DecideAsync(state, questions, images, videos, model, boosters)` | One decision with any number of questions, up to 16 images, up to 4 videos and up to 4 boosters |
+| `DecideAsync(state, questions, images, videos, model, boosters, fallback)` | One decision with any number of questions, up to 16 images, up to 4 videos and up to 4 boosters |
 | `DecideManyAsync(requests, concurrency = 8)` | Many decisions, at most `concurrency` at a time over shared connections. One `DecisionResult` per request, in input order, holding a `Decision` or the `Error` that request ended with. One failure does not stop the others. Every request is checked before any is sent: a `concurrency` below 1 or a bad argument throws `ArgumentException`, and a request that breaks one of the API's fixed rules throws its `BadRequestError` or `ValidationError`, with nothing sent. An image shared by several requests is uploaded once. |
-| `CheckAsync(state, instructions, ifTrue, ifFalse, images, videos, model, boosters)` | One yes-or-no question; returns its `TruthAnswer` |
-| `ClassifyAsync(state, instructions, options, images, videos, model, boosters)` | One choice question; returns its `ChoiceAnswer` |
-| `ScoreAsync(state, instructions, levels, images, videos, model, boosters)` | One score question; returns its `ScoreAnswer` |
-| `NumberAsync(state, instructions, min, max, step, images, videos, model, boosters)` | One number question; returns its `NumberAnswer` |
+| `CheckAsync(state, instructions, ifTrue, ifFalse, images, videos, model, boosters, fallback)` | One yes-or-no question; returns its `TruthAnswer` |
+| `ClassifyAsync(state, instructions, options, images, videos, model, boosters, fallback)` | One choice question; returns its `ChoiceAnswer` |
+| `ScoreAsync(state, instructions, levels, images, videos, model, boosters, fallback)` | One score question; returns its `ScoreAnswer` |
+| `NumberAsync(state, instructions, min, max, step, images, videos, model, boosters, fallback)` | One number question; returns its `NumberAnswer` |
 | `UploadAsync(images)` | Uploads images whatever their size and returns one `upload_id` each (see Images) |
 | `OpenSessionAsync(state, questions, instructions, model, window, ttlSeconds)` | Opens a session (see Sessions) |
 | `SuperviseAsync(body, feed, onReply)` | Keeps a feed of readings answered, reopening sessions as needed (see Sessions) |
 | `Batches.*`, `RunBatchAsync(requests, pollInterval, timeout)` | The Batch API (see Batches) |
-| `GateAsync(action, context, images, videos, model, boosters)` | Judges an action before it runs: a `risk` score, a `touches_production` truth and an `allow`, `confirm` or `block` verdict |
+| `GateAsync(action, context, images, videos, model, boosters, fallback)` | Judges an action before it runs: a `risk` score, a `touches_production` truth and an `allow`, `confirm` or `block` verdict |
 | `ModelsAsync()` | The models and their published limits, one `ModelInfo` each, your workspace's fine-tuned models included |
 | `DecideRawAsync(body)` | Sends a body exactly as given and returns the parsed response. For API fields this version does not know yet. |
 
@@ -106,7 +106,7 @@ var results = await dn.DecideManyAsync(tickets.Select(t => new DecideRequest
 }));
 ```
 
-Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings`, `Evidence` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos); for a request with boosters, `Evidence`, `Usage.BoosterTokens` and `Usage.Boosters` say what the boosters read (see Boosters).
+Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings`, `Evidence`, `Fallback` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos); for a request with boosters, `Evidence`, `Usage.BoosterTokens` and `Usage.Boosters` say what the boosters read (see Boosters).
 
 `GateAsync` sends the state `{"action": ..., "context": ...}` and three questions with fixed wording, the same in every official DecisionNode SDK:
 
@@ -328,6 +328,20 @@ Every error of a request that named boosters carries `Boosters`: each booster's 
 ## Fine-tuned models
 
 A fine-tuned model is your workspace's own version of a model, trained in the console on decisions you labelled. Call it by its name in `model`, as given: `decisionnode-1.0-flash@acme/fraud` means the version deployed most recently, and `decisionnode-1.0-flash@acme/fraud:3` pins version 3. The decision's `Model` always names the pinned version that answered. `ModelsAsync()` lists your workspace's fine-tuned models beside the catalogue's, with `FineTuned`, `Base` (the model it was trained from), `AdapterVersion` and `Status` (`deployed` answers decisions; `ready` is trained but not deployed). A name that does not exist, is not deployed or belongs to another workspace is the API's `BadRequestError` "Unknown model: <name>".
+
+## Fallback
+
+When `decisionnode-1.0` has no worker ready to take a request at once, the API answers it with `decisionnode-1.0-flash` instead of making you wait. The decision says so: `Decision.Fallback` is `null` on an ordinary answer, and on a fallback answer holds `ServedModel` (the model that answered) and `RequestedModel` (the model you asked for). `Decision.Model` is always the model that answered.
+
+```csharp
+var d = await dn.DecideAsync("I was charged twice.", questions, model: "decisionnode-1.0");
+if (d.Fallback is { } f)
+{
+    Console.WriteLine($"{f.ServedModel} answered for {f.RequestedModel}");
+}
+```
+
+Pass `fallback: false` (or `Fallback = false` on a `DecideRequest` or `BatchRequest`) when only the model you asked for may answer: such a request gets an `OverloadedError` instead, retried like any 529. Left out, the API's default applies and the field is not sent. `DecideAsync`, the helpers, `DecideManyAsync`, `CheckRequest` and batch lines take it.
 
 ## Sessions
 

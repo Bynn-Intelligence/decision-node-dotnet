@@ -333,6 +333,7 @@ public sealed class BatchesClient
             };
             DecisionNodeClient.WithVideos(body, videos);
             Booster.AddTo(body, boosters);
+            DecisionNodeClient.WithFallback(body, request.Fallback);
             var held = _client.Held(model);
             LocalChecks.Request(body, images.Select(i => i.Id).ToList(), held, entriesAfter: LocalChecks.CountEntries(images, videos, held));
             LocalChecks.Images(images, held);
@@ -429,6 +430,9 @@ public sealed class BatchRequest
 
     /// <summary>Boosters that read the line's images before the decision, up to 4, in order; none when <c>null</c> or empty.</summary>
     public IReadOnlyList<Booster>? Boosters { get; init; }
+
+    /// <summary><c>false</c>: no other model answers when the one asked for has no ready worker. Left out when <c>null</c>.</summary>
+    public bool? Fallback { get; init; }
 }
 
 /// <summary>A batch: every field of the batch object.</summary>

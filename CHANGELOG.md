@@ -14,11 +14,12 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - `DecisionNodeError.Boosters`: each booster's `BoosterStatus` (`Status`, `LatencyMs`) from the `x-decisionnode-boosters` response header, in order; empty when the header is absent.
 - The booster errors use the existing classes: `booster_unknown`, `booster_input_mismatch` and a malformed list (`api_usage_error`) are `BadRequestError`; `booster_not_enabled`, like every 403 that is not a refusal, is `PermissionDeniedError`, never retried; `booster_unavailable` is an `OverloadedError`, retried like any 529.
 - `ModelInfo.FineTuned`, `Base`, `AdapterVersion` and `Status` for the fine-tuned models `ModelsAsync` lists; `null` on a catalogue entry.
+- `fallback` on `DecideAsync`, `CheckAsync`, `ClassifyAsync`, `ScoreAsync`, `NumberAsync`, `GateAsync`, `DecideRequest` (so `DecideManyAsync` and `CheckRequest`) and `BatchRequest`, sent as `"fallback": true` or `false` only when given. `Decision.Fallback` (a `Fallback` with `ServedModel` and `RequestedModel`) when another model answered for the one asked for, read from the `x-decisionnode-fallback` and `x-decisionnode-requested-model` headers; `null` on an ordinary answer. A `fallback: false` request that no worker can take is an `OverloadedError`, retried like any 529.
 - The API's 25 MiB body limit: `DecisionNodeClient.MaxBodyBytes` (26,214,400). A body over it, measured as it would be sent (inline images and frames in it, an image that would be uploaded named by its upload id), throws the new `RequestTooLargeError` before anything is sent or uploaded, on `DecideAsync`, the helpers, `DecideManyAsync` (for the whole call), `CheckRequest` and each batch line. The API's `413` is a `RequestTooLargeError` too, never retried.
 
 ### Changed
 
-- `boosters` sits after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
+- `boosters` and `fallback` sit after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
 - A fine-tuned model's name (`decisionnode-1.0-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
 - Every `413`, a presign's and a batch add's included, is a `RequestTooLargeError` (the base `DecisionNodeError` before).
 - CI runs conformance suite 1.11.
