@@ -136,7 +136,7 @@ var d = await dn.DecideAsync(
 | `Image.FromBytes(id, data)` with a `byte[]` or `ReadOnlyMemory<byte>`, `FromStream`, `FromStreamAsync`, `FromBase64` | As local bytes. The bytes are not copied |
 | `Image.FromUploadId(id, uploadId)` | As given, an upload from `UploadAsync` |
 
-Local bytes are checked on your machine before any request: JPEG, PNG or WebP by their first bytes (a `mediaType` you give must match them), at most 10 MB, at most 40 megapixels read from the image header without decoding it, and ids unique. A request that breaks one of these rules throws `BadRequestError` with nothing sent. A request takes up to 16 images (URLs included); more is the API's `ValidationError`, a `too_long` entry on `["body", "images"]` listed with the request's other entries. No image is resized or re-encoded.
+Local bytes are checked on your machine before any request: JPEG, PNG or WebP by their first bytes (a `mediaType` you give must match them), at most 10 MB, at most 40 megapixels read from the image header without decoding it. Every image needs an id of at most 64 characters (counted as Unicode code points, so 64 characters outside the Basic Multilingual Plane are taken), unique within the request. A request that breaks one of these rules throws `BadRequestError` with nothing sent. A request takes up to 16 images (URLs included); more is the API's `ValidationError`, a `too_long` entry on `["body", "images"]` listed with the request's other entries. No image is resized or re-encoded.
 
 Then the library picks the fastest way to send them. When the request's local images total under the inline threshold (`DecisionNodeClient.DefaultInlineThreshold`, 512 KiB, set with `inlineThreshold`), they travel inline as base64. At or above it they are uploaded first: one `POST /v1/uploads` for all of them, one `PUT` each to storage in parallel, then the request names them by `upload_id`. The `PUT` carries exactly the headers the upload answer names and the bytes: never your key, never your own headers, and it never follows a redirect. A `PUT` refused because its URL's five minutes ran out is presigned again once. Each `PUT` attempt has its own timeout, `uploadTimeout` (60 seconds by default), apart from the API's `timeout`.
 
@@ -438,6 +438,8 @@ Every error derives from `DecisionNodeError` (catch that name to catch them all)
 | any other status, 3xx and 410 included | `DecisionNodeError` itself, with `Status` | |
 | a storage `PUT` that failed | `DecisionNodeError` itself, `ErrorType` `upload_failed`, the storage's error code in `Reason` | |
 | no response | `ConnectionError`, `TimeoutError` | |
+
+An error whose body is not JSON, such as an HTML page from a proxy or an empty body, is classified by its status alone: `ErrorType` is `null` (so a 400 is never a `ContextLimitError` and a 403 never a `RefusalError`), `RequestId` and `Reason` come from their headers, and the `Message` is the library's own description, `HTTP <status> <text>` with ` (request id <id>)` when there is one, for example `HTTP 413 Content Too Large` or `HTTP 408 Request Timeout (request id req_edge_0408)`. The page itself is never read into the error. Retries follow the status as for any other error: a 408 is retried, a 413 never.
 
 ```csharp
 try

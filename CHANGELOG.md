@@ -17,8 +17,11 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - `fallback` on `DecideAsync`, `CheckAsync`, `ClassifyAsync`, `ScoreAsync`, `NumberAsync`, `GateAsync`, `DecideRequest` (so `DecideManyAsync` and `CheckRequest`) and `BatchRequest`, sent as `"fallback": true` or `false` only when given. `Decision.Fallback` (a `Fallback` with `ServedModel` and `RequestedModel`) when another model answered for the one asked for, read from the `x-decisionnode-fallback` and `x-decisionnode-requested-model` headers; `null` on an ordinary answer. A `fallback: false` request that no worker can take is an `OverloadedError`, retried like any 529.
 - The API's 25 MiB body limit: `DecisionNodeClient.MaxBodyBytes` (26,214,400). A body over it, measured as it would be sent (inline images and frames in it, an image that would be uploaded named by its upload id), throws the new `RequestTooLargeError` before anything is sent or uploaded, on `DecideAsync`, the helpers, `DecideManyAsync` (for the whole call), `CheckRequest` and each batch line. The API's `413` is a `RequestTooLargeError` too, never retried.
 
+- An image id longer than 64 characters (counted as Unicode code points) throws `BadRequestError` (`api_usage_error`, `Image <n>: its id is longer than 64 characters.`) before anything is sent, checked image by image after the empty-id check and before the duplicate check.
+
 ### Changed
 
+- An error whose body is not JSON (an HTML page from a proxy, plain text, an empty body) is classified by its status alone, with `ErrorType` `null`, `RequestId` and `Reason` from their headers, and the message `HTTP <status> <text>` plus the request id when there is one; the body is never read into the error.
 - `boosters` and `fallback` sit after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
 - A fine-tuned model's name (`decisionnode-1.0-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
 - Every `413`, a presign's and a batch add's included, is a `RequestTooLargeError` (the base `DecisionNodeError` before).

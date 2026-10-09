@@ -26,6 +26,7 @@ internal static class LocalChecks
     internal const int MaxImageBytes = 10 * 1024 * 1024;
     internal const long MaxImagePixels = 40_000_000;
     internal const int MaxUrlChars = 2048;
+    internal const int MaxImageIdChars = 64;
     internal const int MaxChoiceOptions = 255;
     internal const int MaxScoreLevels = 10;
     internal const int MaxGridValues = 4096;
@@ -541,6 +542,11 @@ internal static class LocalChecks
             if (string.IsNullOrEmpty(image.Id))
             {
                 throw BadRequest($"Image {i} needs an id.", "api_usage_error", null);
+            }
+            // Counted in Unicode code points, as the API counts them, never UTF-16 units.
+            if (image.Id.EnumerateRunes().Count() > MaxImageIdChars)
+            {
+                throw BadRequest($"Image {i}: its id is longer than {MaxImageIdChars} characters.", "api_usage_error", null);
             }
             if (!seen.Add(image.Id))
             {

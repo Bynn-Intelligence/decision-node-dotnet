@@ -1077,15 +1077,76 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>The error class and fields a status, body and headers give.</summary>
     internal static DecisionNodeError ErrorFor(int status, string text, Func<string, string?> header)
     {
-        JsonNode? body = null;
+        JsonNode? body;
         try
         {
             body = JsonNode.Parse(text);
         }
         catch (JsonException)
         {
+            return NonJsonErrorFor(status, header);
         }
         return ErrorFor(status, body, header);
+    }
+
+    /// <summary>The fixed status texts of an error whose body is not JSON, the same in every SDK.</summary>
+    private static readonly IReadOnlyDictionary<int, string> StatusTexts = new Dictionary<int, string>
+    {
+        [400] = "Bad Request",
+        [401] = "Unauthorized",
+        [402] = "Payment Required",
+        [403] = "Forbidden",
+        [404] = "Not Found",
+        [405] = "Method Not Allowed",
+        [408] = "Request Timeout",
+        [409] = "Conflict",
+        [410] = "Gone",
+        [413] = "Content Too Large",
+        [422] = "Unprocessable Content",
+        [429] = "Too Many Requests",
+        [500] = "Internal Server Error",
+        [502] = "Bad Gateway",
+        [503] = "Service Unavailable",
+        [504] = "Gateway Timeout",
+        [529] = "Overloaded",
+    };
+
+    /// <summary>
+    /// An error whose body is not JSON (an HTML or text page from the service's edge or a proxy,
+    /// or an empty body): classified by its status alone, with no <c>error_type</c>, and described
+    /// as <c>HTTP &lt;status&gt; &lt;text&gt;</c> with the request id when there is one. The body
+    /// is never read into any field.
+    /// </summary>
+    internal static DecisionNodeError NonJsonErrorFor(int status, Func<string, string?> header)
+    {
+        var requestId = header("x-request-id");
+        var message = StatusTexts.TryGetValue(status, out var text) ? $"HTTP {status} {text}" : $"HTTP {status}";
+        if (requestId is not null)
+        {
+            message += $" (request id {requestId})";
+        }
+        var details = new ErrorDetails
+        {
+            Status = status,
+            Message = message,
+            RequestId = requestId,
+            Reason = header("x-decisionnode-error"),
+            Boosters = BoosterStatus.ParseHeader(header("x-decisionnode-boosters")),
+        };
+        return status switch
+        {
+            400 => new BadRequestError(details),
+            401 => new AuthenticationError(details),
+            402 => new InsufficientCreditError(details),
+            403 => new PermissionDeniedError(details),
+            404 => new NotFoundError(details),
+            413 => new RequestTooLargeError(details),
+            422 => new ValidationError(details, new JsonArray()),
+            429 => new RateLimitError(details, RetryWait(header)),
+            529 => new OverloadedError(details, RetryWait(header)),
+            >= 500 and <= 599 => new ServerError(details),
+            _ => new DecisionNodeError(details),
+        };
     }
 
     internal static DecisionNodeError ErrorFor(int status, JsonNode? body, Func<string, string?> header)
