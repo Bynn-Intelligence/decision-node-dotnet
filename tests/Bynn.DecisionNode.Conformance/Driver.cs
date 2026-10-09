@@ -438,7 +438,7 @@ public static class Driver
         var typedOptions = !spec.ContainsKey("options") || spec["options"] is not null;
         if (!typedImages || !typedRequire || !typedOptions)
         {
-            var wire = new JsonObject { ["booster"] = name };
+            var wire = new JsonObject { ["name"] = name };
             foreach (var key in new[] { "images", "require", "options" })
             {
                 if (spec.ContainsKey(key))

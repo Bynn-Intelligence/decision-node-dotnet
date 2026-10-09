@@ -43,12 +43,12 @@ public class SpecOneThreeTests
             Booster.Of("ai_generated", images: new[] { "c3d4" }, require: true),
             Booster.Of("later", options: new { level = 2 }),
             Booster.Of("bare"),
-            new JsonObject { ["booster"] = "raw", ["require"] = false },
+            new JsonObject { ["name"] = "raw", ["require"] = false },
             Booster.FromJson(JsonValue.Create("named")!),
         });
         var body = Assert.Single(stub.Requests).Json!;
         Assert.Equal(
-            """["age",{"booster":"ai_generated","images":["c3d4"],"require":true},{"booster":"later","options":{"level":2}},{"booster":"bare"},{"booster":"raw","require":false},"named"]""",
+            """["age",{"name":"ai_generated","images":["c3d4"],"require":true},{"name":"later","options":{"level":2}},{"name":"bare"},{"name":"raw","require":false},"named"]""",
             body["boosters"]!.ToJsonString());
     }
 
@@ -335,7 +335,9 @@ public class SpecOneThreeTests
         Assert.Equal("age", named.Name);
         Assert.Equal("\"age\"", named.ToString());
         Assert.Equal("ai_generated", Booster.Of(Booster.AiGenerated, require: true).Name);
-        Assert.Equal("""{"booster":"x"}""", Booster.FromObject(new Dictionary<string, object> { ["booster"] = "x" }).ToJson().ToJsonString());
+        Assert.Equal("""{"name":"x"}""", Booster.FromObject(new Dictionary<string, object> { ["name"] = "x" }).ToJson().ToJsonString());
+        Assert.Equal("x", Booster.FromObject(new Dictionary<string, object> { ["name"] = "x" }).Name);
+        Assert.Equal("""{"name":"bare"}""", Booster.Of("bare").ToString());
         Assert.Throws<ArgumentNullException>(() => Booster.Of(null!));
     }
 }

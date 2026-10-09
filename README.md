@@ -246,7 +246,7 @@ A booster is a specialist model that reads the request's images before the decis
 | `age` | A picture of a person | How old the person is, with a range and a confidence (the largest face is read) |
 | `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
 
-Name a booster by its name, or build one with `Booster.Of(name, images, require, options)`:
+Name the boosters a request should use:
 
 ```csharp
 var d = await dn.DecideAsync(
@@ -261,11 +261,7 @@ var d = await dn.DecideAsync(
         Image.FromFile("a1b2", "selfie.jpg"),
         Image.FromUrl("c3d4", "https://files.example.com/c3d4.jpg"),
     },
-    boosters: new Booster[]
-    {
-        "age",
-        Booster.Of("ai_generated", images: new[] { "c3d4" }, require: true),
-    });
+    boosters: new Booster[] { "age", "ai_generated" });
 
 Console.WriteLine(d.Truth("adult").Truth);
 
@@ -290,14 +286,24 @@ Console.WriteLine(d.Usage.BoosterTokens); // the readings' share of the input to
 Console.WriteLine(d.Usage.Boosters);      // the booster calls billed
 ```
 
+A booster that needs a setting is built with `Booster.Of(name, images, require, options)`. Here the AI-generated check reads only the second picture, and the request fails if it cannot answer:
+
+```csharp
+boosters: new Booster[]
+{
+    "age",
+    Booster.Of("ai_generated", images: new[] { "c3d4" }, require: true),
+}
+```
+
 | `Booster.Of` argument | Sent |
 |---|---|
-| `name` | `booster`, the booster's name |
+| `name` | `name`, the booster's name |
 | `images` | The ids of the request's images it reads; left out, it reads every image |
 | `require` | `true`: a booster that fails or does not answer in time fails the request with an `OverloadedError` (`booster_unavailable`), which is retried like any 529. Left out, the decision runs without that reading and `Evidence` says why |
 | `options` | The booster's settings; neither booster takes any yet |
 
-A name alone is sent as the name (`"age"`); `Booster.FromJson(...)` takes the API's wire form as given. Up to 4 boosters go with a request, each once, in the order given, and the `boosters` field is left out when there are none. Boosters read images in every form (URL, inline or uploaded), every question sees every reading, and they go with `DecideAsync`, the helpers, `DecideManyAsync`, `CheckRequest` and batch lines (`BatchRequest.Boosters`). Sessions take no boosters. Names are not a closed list, so a booster added to the API works with this version; the library checks nothing about boosters before sending, because which boosters a workspace may use is the server's to know.
+A name alone is sent as the name (`"age"`), and `Booster.Of(...)` as an object, `{"name": "ai_generated", "images": ["c3d4"], "require": true}`; `Booster.FromJson(...)` takes the API's wire form as given. Up to 4 boosters go with a request, each once, in the order given, and the `boosters` field is left out when there are none. Boosters read images in every form (URL, inline or uploaded), every question sees every reading, and they go with `DecideAsync`, the helpers, `DecideManyAsync`, `CheckRequest` and batch lines (`BatchRequest.Boosters`). Sessions take no boosters. Names are not a closed list, so a booster added to the API works with this version; the library checks nothing about boosters before sending, because which boosters a workspace may use is the server's to know.
 
 `Decision.Evidence` holds one `Evidence` per booster the request named, by name in the request's order, and is `null` when it named none. Each has `Version` (for example `age-v3`), `Status` (`ok`, `timeout`, `error` or `skipped` when none of the request's images is one it reads), `LatencyMs` and `Results`, one reading per image read, empty unless the status is `ok`:
 

@@ -12,7 +12,7 @@ namespace Bynn.DecisionNode;
 /// </summary>
 /// <remarks>
 /// A name converts implicitly (<c>"age"</c> is sent as <c>"age"</c>); <see cref="Of"/> builds
-/// the object form, <c>{"booster", "images"?, "require"?, "options"?}</c>, with each argument
+/// the object form, <c>{"name", "images"?, "require"?, "options"?}</c>, with each argument
 /// left out when not given; <see cref="FromJson(JsonNode)"/> takes the wire form itself. Names
 /// are not a closed list, so a booster added on the server works with this version, and the
 /// library checks nothing about boosters before sending: the API answers an unknown name, a
@@ -45,8 +45,8 @@ public sealed class Booster
         _wire = wire;
     }
 
-    /// <summary>The booster's name: the name itself, or the <c>booster</c> field of the object form.</summary>
-    public string? Name => _wire is JsonObject o ? JsonValues.AsString(o["booster"]) : JsonValues.AsString(_wire);
+    /// <summary>The booster's name: the name itself, or the <c>name</c> field of the object form.</summary>
+    public string? Name => _wire is JsonObject o ? JsonValues.AsString(o["name"]) : JsonValues.AsString(_wire);
 
     /// <summary>A booster by its name alone, sent as the name.</summary>
     public static Booster Named(string name)
@@ -67,7 +67,7 @@ public sealed class Booster
     public static Booster Of(string name, IEnumerable<string>? images = null, bool? require = null, object? options = null)
     {
         ArgumentNullException.ThrowIfNull(name);
-        var wire = new JsonObject { ["booster"] = name };
+        var wire = new JsonObject { ["name"] = name };
         if (images is not null)
         {
             var list = new JsonArray();
