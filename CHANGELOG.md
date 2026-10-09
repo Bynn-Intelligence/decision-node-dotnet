@@ -2,6 +2,25 @@
 
 All notable changes to this library are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - Unreleased
+
+Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `"1.3"`): boosters and fine-tuned model names.
+
+### Added
+
+- Boosters: `Booster` (a name converts implicitly, `Booster.Of(name, images, require, options)` builds the object form with each argument left out when not given, `Booster.FromJson` takes the wire form as given), with `Booster.Age` and `Booster.AiGenerated`. `boosters` on `DecideAsync`, `CheckAsync`, `ClassifyAsync`, `ScoreAsync`, `NumberAsync`, `GateAsync`, `DecideRequest` (so `DecideManyAsync` and `CheckRequest`) and `BatchRequest`, sent in the order given and left out of the body when there are none. Nothing about boosters is checked before sending; their `options` count toward the 128-level nesting limit. Sessions take no boosters.
+- `Decision.Evidence`: one `Evidence` per booster the request named (`Version`, `Status`, `LatencyMs`, `Results`), by name in the request's order, `null` when it named none. Readings are `AgeReading`, `AiGeneratedReading` (with `TopGenerator`) or, for a booster this version does not know or a reading with a missing or wrongly typed field, `UnknownReading` with its raw fields; the decision does not fail.
+- `Usage.BoosterTokens` and `Usage.Boosters` (`null` for a request without boosters), in batch results too.
+- `DecisionNodeError.Boosters`: each booster's `BoosterStatus` (`Status`, `LatencyMs`) from the `x-decisionnode-boosters` response header, in order; empty when the header is absent.
+- The booster errors use the existing classes: `booster_unknown`, `booster_input_mismatch` and a malformed list (`api_usage_error`) are `BadRequestError`; `booster_not_enabled`, like every 403 that is not a refusal, is `PermissionDeniedError`, never retried; `booster_unavailable` is an `OverloadedError`, retried like any 529.
+- `ModelInfo.FineTuned`, `Base`, `AdapterVersion` and `Status` for the fine-tuned models `ModelsAsync` lists; `null` on a catalogue entry.
+
+### Changed
+
+- `boosters` sits after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
+- A fine-tuned model's name (`decisionnode-1.0-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
+- CI runs conformance suite 1.11.
+
 ## [0.2.0] - Unreleased
 
 Implements version 1.2 of the DecisionNode SDK specification (`SpecVersion` is `"1.2"`): sixteen images a request, videos sent as frames, and point and box questions.

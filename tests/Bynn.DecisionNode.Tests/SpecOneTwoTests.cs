@@ -26,13 +26,6 @@ public class SpecOneTwoTests
     }
 
     [Fact]
-    public void TheSpecVersionIsOnePointTwo()
-    {
-        Assert.Equal("1.2", DecisionNodeClient.SpecVersion);
-        Assert.Equal("0.2.0", DecisionNodeClient.Version);
-    }
-
-    [Fact]
     public async Task SixteenImagesGoInlineAndTheSeventeenthIsRefused()
     {
         var stub = new StubHandler((_, _) => Ok());

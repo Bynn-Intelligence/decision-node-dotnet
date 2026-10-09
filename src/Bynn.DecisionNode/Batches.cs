@@ -323,6 +323,7 @@ public sealed class BatchesClient
             var qs = DecisionNodeClient.QuestionMap(request.Questions, nameof(requests));
             var images = DecisionNodeClient.ImageList(request.Images, nameof(requests));
             var videos = DecisionNodeClient.VideoList(request.Videos, nameof(requests));
+            var boosters = Booster.List(request.Boosters, nameof(requests));
             var model = string.IsNullOrEmpty(request.Model) ? _client.Model : request.Model;
             var body = new JsonObject
             {
@@ -331,6 +332,7 @@ public sealed class BatchesClient
                 ["questions"] = qs,
             };
             DecisionNodeClient.WithVideos(body, videos);
+            Booster.AddTo(body, boosters);
             var held = _client.Held(model);
             LocalChecks.Request(body, images.Select(i => i.Id).ToList(), held, entriesAfter: LocalChecks.CountEntries(images, videos, held));
             LocalChecks.Images(images, held);
@@ -420,8 +422,11 @@ public sealed class BatchRequest
     /// <summary>Videos sent as frames, up to 4; their frames go inline in the line.</summary>
     public IReadOnlyList<Video>? Videos { get; init; }
 
-    /// <summary>The model for this request; the client's model when <c>null</c> or empty.</summary>
+    /// <summary>The model for this request, a fine-tuned model's name included; the client's model when <c>null</c> or empty.</summary>
     public string? Model { get; init; }
+
+    /// <summary>Boosters that read the line's images before the decision, up to 4, in order; none when <c>null</c> or empty.</summary>
+    public IReadOnlyList<Booster>? Boosters { get; init; }
 }
 
 /// <summary>A batch: every field of the batch object.</summary>

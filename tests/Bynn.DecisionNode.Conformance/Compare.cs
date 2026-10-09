@@ -8,7 +8,13 @@ namespace Bynn.DecisionNode.Conformance;
 public static class Compare
 {
     /// <summary>Keys whose values compare whole, even inside a partial expectation.</summary>
-    private static readonly HashSet<string> Exact = new() { "probabilities", "legend", "raw", "entries", "safety", "body", "limits" };
+    private static readonly HashSet<string> Exact = new() { "probabilities", "legend", "raw", "entries", "safety", "body", "limits", "evidence", "boosters" };
+
+    /// <summary>
+    /// Keys compared whole and in their key order too (suite 1.11): a decision's evidence is
+    /// in the request's order, an error's boosters in the header's.
+    /// </summary>
+    private static readonly HashSet<string> Ordered = new() { "evidence", "boosters" };
 
     /// <summary>Reading options deep enough for the nesting cases (the API's limit is 128).</summary>
     public static readonly JsonDocumentOptions Deep = new() { MaxDepth = 1024 };
@@ -79,6 +85,10 @@ public static class Compare
                     if (!Same(v, got))
                     {
                         throw Fail($"{path}.{k}: expected {Short(v)}, got {Short(got)}");
+                    }
+                    if (Ordered.Contains(k) && v is JsonObject ov && got is JsonObject og && !ov.Select(p => p.Key).SequenceEqual(og.Select(p => p.Key)))
+                    {
+                        throw Fail($"{path}.{k}: expected the order {string.Join(", ", ov.Select(p => p.Key))}, got {string.Join(", ", og.Select(p => p.Key))}");
                     }
                 }
                 else

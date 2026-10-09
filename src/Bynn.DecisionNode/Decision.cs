@@ -43,6 +43,7 @@ public sealed class Decision
         RequestId = header("x-request-id");
         LatencyMs = double.TryParse(header("x-decisionnode-latency-ms"), NumberStyles.Float, CultureInfo.InvariantCulture, out var ms) ? ms : null;
         Safety = Safety.Parse(header("x-decisionnode-safety"));
+        Evidence = Bynn.DecisionNode.Evidence.Parse(body["evidence"]);
     }
 
     /// <summary>The answers, by question id.</summary>
@@ -79,6 +80,12 @@ public sealed class Decision
     /// <summary>The safety check's result, or <c>null</c> when the server sent none (a self-hosted server).</summary>
     public Safety? Safety { get; }
 
+    /// <summary>
+    /// What each booster the request named read, by booster name in the request's order;
+    /// <c>null</c> when the request named none.
+    /// </summary>
+    public IReadOnlyDictionary<string, Evidence>? Evidence { get; }
+
     /// <summary>The parsed response body, including any field this version of the library does not know.</summary>
     public JsonObject Raw { get; }
 
@@ -101,12 +108,14 @@ public sealed class Decision
     public BoxAnswer Box(string id) => this[id].AsBox();
 }
 
-/// <summary>Token counts of a decision, and what was read of its videos.</summary>
-/// <param name="InputTokens">Tokens in the request, images and videos included.</param>
+/// <summary>Token counts of a decision, what was read of its videos, and its booster calls.</summary>
+/// <param name="InputTokens">Tokens in the request, images, videos and booster readings included.</param>
 /// <param name="OutputTokens">Tokens generated.</param>
 /// <param name="VideoFrames">The frames read over all videos; <c>null</c> for a request without videos.</param>
 /// <param name="VideoSeconds">The seconds of the video windows read, as received; <c>null</c> for a request without videos.</param>
-public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null);
+/// <param name="BoosterTokens">The share of <paramref name="InputTokens"/> the boosters' readings take; <c>null</c> for a request without boosters.</param>
+/// <param name="Boosters">The booster calls billed; <c>null</c> for a request without boosters.</param>
+public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null, long? BoosterTokens = null, long? Boosters = null);
 
 /// <summary>A model listed by <c>GET /v1/models</c>.</summary>
 public sealed class ModelInfo
@@ -174,6 +183,18 @@ public sealed class ModelInfo
     /// <summary>The model's Batch API limits (<c>batch</c>: <c>requests_per_batch</c>, <c>add_bytes</c>, <c>price_factor</c> and the rest).</summary>
     public JsonObject? Batch => Raw["batch"] as JsonObject;
 
+    /// <summary><c>true</c> for a fine-tuned model of the key's workspace; <c>null</c> on a catalogue entry.</summary>
+    public bool? FineTuned => Raw["fine_tuned"] is JsonValue v && v.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False ? v.GetValue<bool>() : null;
+
+    /// <summary>For a fine-tuned model, the pinned id of the model it was trained from (<c>base</c>).</summary>
+    public string? Base => JsonValues.AsString(Raw["base"]);
+
+    /// <summary>For a fine-tuned model, its version number (<c>adapter_version</c>); on a plain name, the version it resolves to.</summary>
+    public long? AdapterVersion => Long("adapter_version");
+
+    /// <summary>For a fine-tuned model, <c>deployed</c> (answers decisions), <c>ready</c> (trained, not deployed) or a newer value, as received.</summary>
+    public string? Status => JsonValues.AsString(Raw["status"]);
+
     private long? Long(string field) => JsonValues.AsLong(Raw[field]);
 
     /// <summary>The entry exactly as received.</summary>
@@ -195,8 +216,11 @@ public sealed class DecideRequest
     /// <summary>Videos sent as frames beside the state, up to 4.</summary>
     public IReadOnlyList<Video>? Videos { get; init; }
 
-    /// <summary>The model for this request; the client's model when <c>null</c> or empty.</summary>
+    /// <summary>The model for this request, a fine-tuned model's name included; the client's model when <c>null</c> or empty.</summary>
     public string? Model { get; init; }
+
+    /// <summary>Boosters that read the request's images before the decision, up to 4, in order; none when <c>null</c> or empty.</summary>
+    public IReadOnlyList<Booster>? Boosters { get; init; }
 }
 
 /// <summary>The outcome of one request of <see cref="DecisionNodeClient.DecideManyAsync"/>: a decision or the error it ended with.</summary>

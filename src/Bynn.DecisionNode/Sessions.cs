@@ -1019,7 +1019,9 @@ public sealed class Session : IAsyncDisposable
                 JsonValues.AsLong(usage["input_tokens"]),
                 JsonValues.AsLong(usage["output_tokens"]),
                 JsonValues.AsLong(usage["video_frames"]),
-                JsonValues.TryDouble(usage["video_seconds"], out var seconds) ? seconds : null)
+                JsonValues.TryDouble(usage["video_seconds"], out var seconds) ? seconds : null,
+                JsonValues.AsLong(usage["booster_tokens"]),
+                JsonValues.AsLong(usage["boosters"]))
             : null;
 
     private static bool IsLoopback(string host) =>

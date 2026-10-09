@@ -77,18 +77,18 @@ Answers are read by question id: `d["route"]`, or typed with `d.Truth(id)`, `d.C
 
 | Method | Does |
 |---|---|
-| `DecideAsync(state, questions, images, videos, model)` | One decision with any number of questions, up to 16 images and up to 4 videos |
+| `DecideAsync(state, questions, images, videos, model, boosters)` | One decision with any number of questions, up to 16 images, up to 4 videos and up to 4 boosters |
 | `DecideManyAsync(requests, concurrency = 8)` | Many decisions, at most `concurrency` at a time over shared connections. One `DecisionResult` per request, in input order, holding a `Decision` or the `Error` that request ended with. One failure does not stop the others. Every request is checked before any is sent: a `concurrency` below 1 or a bad argument throws `ArgumentException`, and a request that breaks one of the API's fixed rules throws its `BadRequestError` or `ValidationError`, with nothing sent. An image shared by several requests is uploaded once. |
-| `CheckAsync(state, instructions, ifTrue, ifFalse, images, videos, model)` | One yes-or-no question; returns its `TruthAnswer` |
-| `ClassifyAsync(state, instructions, options, images, videos, model)` | One choice question; returns its `ChoiceAnswer` |
-| `ScoreAsync(state, instructions, levels, images, videos, model)` | One score question; returns its `ScoreAnswer` |
-| `NumberAsync(state, instructions, min, max, step, images, videos, model)` | One number question; returns its `NumberAnswer` |
+| `CheckAsync(state, instructions, ifTrue, ifFalse, images, videos, model, boosters)` | One yes-or-no question; returns its `TruthAnswer` |
+| `ClassifyAsync(state, instructions, options, images, videos, model, boosters)` | One choice question; returns its `ChoiceAnswer` |
+| `ScoreAsync(state, instructions, levels, images, videos, model, boosters)` | One score question; returns its `ScoreAnswer` |
+| `NumberAsync(state, instructions, min, max, step, images, videos, model, boosters)` | One number question; returns its `NumberAnswer` |
 | `UploadAsync(images)` | Uploads images whatever their size and returns one `upload_id` each (see Images) |
 | `OpenSessionAsync(state, questions, instructions, model, window, ttlSeconds)` | Opens a session (see Sessions) |
 | `SuperviseAsync(body, feed, onReply)` | Keeps a feed of readings answered, reopening sessions as needed (see Sessions) |
 | `Batches.*`, `RunBatchAsync(requests, pollInterval, timeout)` | The Batch API (see Batches) |
-| `GateAsync(action, context, images, videos, model)` | Judges an action before it runs: a `risk` score, a `touches_production` truth and an `allow`, `confirm` or `block` verdict |
-| `ModelsAsync()` | The models and their published limits, one `ModelInfo` each |
+| `GateAsync(action, context, images, videos, model, boosters)` | Judges an action before it runs: a `risk` score, a `touches_production` truth and an `allow`, `confirm` or `block` verdict |
+| `ModelsAsync()` | The models and their published limits, one `ModelInfo` each, your workspace's fine-tuned models included |
 | `DecideRawAsync(body)` | Sends a body exactly as given and returns the parsed response. For API fields this version does not know yet. |
 
 Every method takes a `CancellationToken`. A client is safe to share between threads and reuses its connections (HTTP/2 where the server offers it, so concurrent calls share one connection) and its image uploads: create one and keep it.
@@ -106,7 +106,7 @@ var results = await dn.DecideManyAsync(tickets.Select(t => new DecideRequest
 }));
 ```
 
-Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos).
+Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings`, `Evidence` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos); for a request with boosters, `Evidence`, `Usage.BoosterTokens` and `Usage.Boosters` say what the boosters read (see Boosters).
 
 `GateAsync` sends the state `{"action": ..., "context": ...}` and three questions with fixed wording, the same in every official DecisionNode SDK:
 
@@ -235,6 +235,92 @@ Videos go with `DecideAsync`, the helpers, `DecideManyAsync` and batch lines (`B
 
 To turn a video file into frames, use the `dn` command line: `dn truth "Does a person fall?" --video dock.mp4` samples the file on your machine and sends only the frames.
 
+## Boosters
+
+A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. Two boosters are available:
+
+| Booster | Reads | Tells the model |
+|---|---|---|
+| `age` | A picture of a person | How old the person is, with a range and a confidence (the largest face is read) |
+| `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
+
+Name a booster by its name, or build one with `Booster.Of(name, images, require, options)`:
+
+```csharp
+var d = await dn.DecideAsync(
+    state: "Age check for a new account.",
+    questions: new Dictionary<string, Question>
+    {
+        ["adult"] = Truth("Is the person in the first picture an adult?"),
+        ["synthetic"] = Truth("Is the second picture AI-generated?"),
+    },
+    images: new[]
+    {
+        Image.FromFile("a1b2", "selfie.jpg"),
+        Image.FromUrl("c3d4", "https://files.example.com/c3d4.jpg"),
+    },
+    boosters: new Booster[]
+    {
+        "age",
+        Booster.Of("ai_generated", images: new[] { "c3d4" }, require: true),
+    });
+
+Console.WriteLine(d.Truth("adult").Truth);
+
+foreach (var (name, evidence) in d.Evidence!)
+{
+    Console.WriteLine($"{name}: {evidence.Status} in {evidence.LatencyMs} ms");
+    foreach (var reading in evidence.Results)
+    {
+        switch (reading)
+        {
+            case AgeReading age when age.Faces > 0:
+                Console.WriteLine($"  {age.Image}: {age.AgeYears} ({age.Low} to {age.High})");
+                break;
+            case AiGeneratedReading ai:
+                Console.WriteLine($"  {ai.Image}: generated {ai.Generated}, signed by {ai.C2paSigner ?? "nobody"}");
+                break;
+        }
+    }
+}
+
+Console.WriteLine(d.Usage.BoosterTokens); // the readings' share of the input tokens
+Console.WriteLine(d.Usage.Boosters);      // the booster calls billed
+```
+
+| `Booster.Of` argument | Sent |
+|---|---|
+| `name` | `booster`, the booster's name |
+| `images` | The ids of the request's images it reads; left out, it reads every image |
+| `require` | `true`: a booster that fails or does not answer in time fails the request with an `OverloadedError` (`booster_unavailable`), which is retried like any 529. Left out, the decision runs without that reading and `Evidence` says why |
+| `options` | The booster's settings; neither booster takes any yet |
+
+A name alone is sent as the name (`"age"`); `Booster.FromJson(...)` takes the API's wire form as given. Up to 4 boosters go with a request, each once, in the order given, and the `boosters` field is left out when there are none. Boosters read images in every form (URL, inline or uploaded), every question sees every reading, and they go with `DecideAsync`, the helpers, `DecideManyAsync`, `CheckRequest` and batch lines (`BatchRequest.Boosters`). Sessions take no boosters. Names are not a closed list, so a booster added to the API works with this version; the library checks nothing about boosters before sending, because which boosters a workspace may use is the server's to know.
+
+`Decision.Evidence` holds one `Evidence` per booster the request named, by name in the request's order, and is `null` when it named none. Each has `Version` (for example `age-v3`), `Status` (`ok`, `timeout`, `error` or `skipped` when none of the request's images is one it reads), `LatencyMs` and `Results`, one reading per image read, empty unless the status is `ok`:
+
+| Reading | Fields |
+|---|---|
+| `AgeReading` | `Image`, `Faces`, and `AgeYears`, `Low`, `High`, `Confidence` (each `null` when `Faces` is 0) |
+| `AiGeneratedReading` | `Image`, `Generated` (the probability the picture was made by a generator), `Confidence`, `Method` (`inference` from the pixels, or `c2pa` from the file's Content Credentials), `TopGenerator` (`Name`, `Probability`), `C2paSigner` (`null` when the file has no Content Credentials) |
+| `UnknownReading` | A reading of a booster this version does not know, or one with a missing or wrongly typed field, with its `Raw` fields; the decision does not fail |
+
+Every booster call billed costs USD 0.002, drawn from your prepaid balance with the request's tokens; a booster that timed out or failed is free, a picture the same booster read for your workspace in the last hour is not billed again, and a refused request bills no booster call. The readings' tokens count as input tokens at the model's price.
+
+| Error | When |
+|---|---|
+| `BadRequestError` `booster_unknown` | A name that is not a booster |
+| `BadRequestError` `booster_input_mismatch` | A booster that reads images on a request without any, or an `images` entry that is not an image of the request |
+| `BadRequestError` `api_usage_error` | A malformed `boosters` list: more than 4, a booster named twice, an unknown key in `options` (the reason is in `Reason`) |
+| `PermissionDeniedError` `booster_not_enabled` | The booster is turned off for your workspace |
+| `OverloadedError` `booster_unavailable` | A booster with `require: true` failed or did not answer in time; retried |
+
+Every error of a request that named boosters carries `Boosters`: each booster's `Status` and `LatencyMs` from the `x-decisionnode-boosters` response header, in the request's order, so you can see which required booster failed.
+
+## Fine-tuned models
+
+A fine-tuned model is your workspace's own version of a model, trained in the console on decisions you labelled. Call it by its name in `model`, as given: `decisionnode-1.0-flash@acme/fraud` means the version deployed most recently, and `decisionnode-1.0-flash@acme/fraud:3` pins version 3. The decision's `Model` always names the pinned version that answered. `ModelsAsync()` lists your workspace's fine-tuned models beside the catalogue's, with `FineTuned`, `Base` (the model it was trained from), `AdapterVersion` and `Status` (`deployed` answers decisions; `ready` is trained but not deployed). A name that does not exist, is not deployed or belongs to another workspace is the API's `BadRequestError` "Unknown model: <name>".
+
 ## Sessions
 
 A session holds a state and questions on the server and answers them again for every frame you send on its WebSocket: a drone's telemetry, a camera, a live call. The newest frame wins: a frame that arrives while another waits replaces it, so a fast feed gets the newest answer, never a backlog.
@@ -311,18 +397,18 @@ using var dn = new DecisionNodeClient(headers: new Dictionary<string, string>
 
 ## Errors
 
-Every error derives from `DecisionNodeError` (catch that name to catch them all), which carries `Status`, `ErrorType`, `RequestId` and `Reason`: the server's explanation in words from the `x-decisionnode-error` header, for example "question 'q': a score takes up to 10 levels, got 11". The exception's own `Message` is the server's message exactly (`detail.message`, or `detail` when it is a string; empty when the server sent neither), or the library's description when no response arrived.
+Every error derives from `DecisionNodeError` (catch that name to catch them all), which carries `Status`, `ErrorType`, `RequestId`, `Boosters` (see Boosters) and `Reason`: the server's explanation in words from the `x-decisionnode-error` header, for example "question 'q': a score takes up to 10 levels, got 11". The exception's own `Message` is the server's message exactly (`detail.message`, or `detail` when it is a string; empty when the server sent neither), or the library's description when no response arrived.
 
 | Status | Error | Extra |
 |---|---|---|
 | 400 | `BadRequestError`; `ContextLimitError` when the request is longer than the model takes | |
 | 401, or no key configured | `AuthenticationError` | |
 | 402 | `InsufficientCreditError` | |
-| 403 | `RefusalError` for a refusal, else `PermissionDeniedError` | `Category` (`harm` or `self_harm`), `Safety` |
+| 403 | `RefusalError` for a refusal, else `PermissionDeniedError` (a booster turned off for the workspace, a suspended workspace) | `Category` (`harm` or `self_harm`), `Safety` |
 | 404 | `NotFoundError` | |
 | 422 | `ValidationError` | `Entries` |
 | 429 | `RateLimitError`; `SessionLimitError` for a session limit | `RetryAfter` |
-| 529 | `OverloadedError` | `RetryAfter` |
+| 529 | `OverloadedError`, `booster_unavailable` included | `RetryAfter` |
 | other 5xx | `ServerError` | |
 | 2xx with a body that is not JSON | `ServerError` | |
 | 2xx where a helper's own answer is missing or malformed | `ServerError` | |
@@ -427,7 +513,7 @@ The library sends no telemetry and no request other than to the base URL, the st
 
 ## Versioning
 
-This library implements version 1.2 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
+This library implements version 1.3 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 

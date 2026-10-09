@@ -367,7 +367,8 @@ public sealed class ConformanceTests
         }
         else if (exp["models"] is { } models)
         {
-            var got = new JsonArray(((IReadOnlyList<ModelInfo>)result!).Select(m => (JsonNode?)Driver.Model(m)).ToArray());
+            var list = (IReadOnlyList<ModelInfo>)result!;
+            var got = new JsonArray(list.Select((m, i) => (JsonNode?)Driver.Model(m, (models as JsonArray)?.ElementAtOrDefault(i) as JsonObject)).ToArray());
             if (!Same(Canon(models), Canon(got)))
             {
                 throw Fail($"models: expected {Short(models)}, got {Short(got)}");

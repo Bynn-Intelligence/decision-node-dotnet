@@ -149,13 +149,13 @@ public static class Driver
             "decide_many" => Wrap(client.DecideManyAsync(
                 ((JsonArray)args["requests"]!).Select(r => Request((JsonObject)r!, ctx)).ToList(),
                 args["concurrency"] is { } c ? (int)c : 8)),
-            "check" => Wrap(client.CheckAsync(State(args, ctx), Arg("instructions"), Arg("true"), Arg("false"), Images(args, ctx), Videos(args, ctx), Text("model"))),
+            "check" => Wrap(client.CheckAsync(State(args, ctx), Arg("instructions"), Arg("true"), Arg("false"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
             "classify" => args["options"] is JsonArray names
-                ? Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), names.Select(n => (string)n!).ToList(), Images(args, ctx), Videos(args, ctx), Text("model")))
-                : Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), Options((JsonObject)args["options"]!), Images(args, ctx), Videos(args, ctx), Text("model"))),
-            "score" => Wrap(client.ScoreAsync(State(args, ctx), Arg("instructions"), ((JsonArray)args["levels"]!).Select(l => (object?)l?.DeepClone()).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"))),
-            "number" => Wrap(client.NumberAsync(State(args, ctx), Arg("instructions"), Number("min"), Number("max"), Number("step"), Images(args, ctx), Videos(args, ctx), Text("model"))),
-            "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Videos(args, ctx), Text("model"))),
+                ? Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), names.Select(n => (string)n!).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx)))
+                : Wrap(client.ClassifyAsync(State(args, ctx), Arg("instructions"), Options((JsonObject)args["options"]!), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
+            "score" => Wrap(client.ScoreAsync(State(args, ctx), Arg("instructions"), ((JsonArray)args["levels"]!).Select(l => (object?)l?.DeepClone()).ToList(), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
+            "number" => Wrap(client.NumberAsync(State(args, ctx), Arg("instructions"), Number("min"), Number("max"), Number("step"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
+            "gate" => Wrap(client.GateAsync(Arg("action")!, Arg("context"), Images(args, ctx), Videos(args, ctx), Text("model"), Boosters(args, ctx))),
             "models" => Wrap(client.ModelsAsync()),
             "decide_raw" => Wrap(client.DecideRawAsync(args["body"]!.DeepClone())),
             "upload" => Wrap(client.UploadAsync(Images(args, ctx)!)),
@@ -321,6 +321,7 @@ public static class Driver
         Images = Images(args, ctx),
         Videos = Videos(args, ctx),
         Model = (string?)args["model"],
+        Boosters = Boosters(args, ctx),
     };
 
     private static List<BatchRequest> BatchRequests(JsonObject args, Dictionary<string, object?> ctx) =>
@@ -336,6 +337,7 @@ public static class Driver
                 Images = Images(o, ctx),
                 Videos = Videos(o, ctx),
                 Model = (string?)o["model"],
+                Boosters = Boosters(o, ctx),
             };
         }).ToList();
 
@@ -411,6 +413,46 @@ public static class Driver
             }
         }
         return Question.FromJson((JsonObject)Plain(q, ctx)!);
+    }
+
+    /// <summary>
+    /// <c>$booster</c> builders, plain names and plain wire-form objects, in order. A builder
+    /// whose <c>images</c> or <c>require</c> the typed <see cref="Booster.Of"/> cannot take is
+    /// passed in its wire form, sent as given.
+    /// </summary>
+    private static List<Booster>? Boosters(JsonObject args, Dictionary<string, object?> ctx) =>
+        Plain(args["boosters"], ctx) is JsonArray list ? list.Select(b => BoosterOf(b!)).ToList() : null;
+
+    private static Booster BoosterOf(JsonNode item)
+    {
+        if (item is not JsonObject { Count: 1 } wrapper || wrapper["$booster"] is not JsonObject spec)
+        {
+            return Booster.FromJson(item);
+        }
+        var name = (string)spec["name"]!;
+        var images = spec["images"];
+        var require = spec["require"];
+        var typedImages = images is null || (images is JsonArray ids && ids.All(i => i is JsonValue v && v.GetValueKind() == System.Text.Json.JsonValueKind.String));
+        var typedRequire = require is null || require.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False;
+        // A null options is sent as null, which the typed builder leaves out.
+        var typedOptions = !spec.ContainsKey("options") || spec["options"] is not null;
+        if (!typedImages || !typedRequire || !typedOptions)
+        {
+            var wire = new JsonObject { ["booster"] = name };
+            foreach (var key in new[] { "images", "require", "options" })
+            {
+                if (spec.ContainsKey(key))
+                {
+                    wire[key] = spec[key]?.DeepClone();
+                }
+            }
+            return Booster.FromJson(wire);
+        }
+        return Booster.Of(
+            name,
+            (images as JsonArray)?.Select(i => (string)i!).ToList(),
+            require is null ? null : (bool)require,
+            spec["options"]?.DeepClone());
     }
 
     private static List<Image>? Images(JsonObject args, Dictionary<string, object?> ctx) =>
@@ -636,6 +678,54 @@ public static class Driver
         ["output_tokens"] = u.OutputTokens,
         ["video_frames"] = u.VideoFrames,
         ["video_seconds"] = u.VideoSeconds,
+        ["booster_tokens"] = u.BoosterTokens,
+        ["boosters"] = u.Boosters,
+    };
+
+    /// <summary>A decision's evidence by booster name, in order; <c>null</c> when it has none.</summary>
+    private static JsonObject? Evidence(IReadOnlyDictionary<string, Evidence>? evidence)
+    {
+        if (evidence is null)
+        {
+            return null;
+        }
+        var o = new JsonObject();
+        foreach (var (name, e) in evidence)
+        {
+            o[name] = new JsonObject
+            {
+                ["version"] = e.Version,
+                ["status"] = e.Status,
+                ["latency_ms"] = e.LatencyMs,
+                ["results"] = new JsonArray(e.Results.Select(r => (JsonNode?)Reading(r)).ToArray()),
+            };
+        }
+        return o;
+    }
+
+    public static JsonObject Reading(Reading r) => r switch
+    {
+        AgeReading a => new JsonObject
+        {
+            ["kind"] = "age",
+            ["image"] = a.Image,
+            ["faces"] = a.Faces,
+            ["age_years"] = a.AgeYears,
+            ["low"] = a.Low,
+            ["high"] = a.High,
+            ["confidence"] = a.Confidence,
+        },
+        AiGeneratedReading g => new JsonObject
+        {
+            ["kind"] = "ai_generated",
+            ["image"] = g.Image,
+            ["generated"] = g.Generated,
+            ["confidence"] = g.Confidence,
+            ["method"] = g.Method,
+            ["top_generator"] = g.TopGenerator is { } t ? new JsonObject { ["name"] = t.Name, ["probability"] = t.Probability } : null,
+            ["c2pa_signer"] = g.C2paSigner,
+        },
+        _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
     };
 
     public static JsonObject Decision(Decision d) => new()
@@ -647,6 +737,7 @@ public static class Driver
         ["warnings"] = new JsonArray(d.Warnings.Select(w => (JsonNode?)w).ToArray()),
         ["safety"] = Safety(d.Safety),
         ["answers"] = Answers(d.Answers),
+        ["evidence"] = Evidence(d.Evidence),
         ["raw"] = d.Raw.DeepClone(),
     };
 
@@ -667,16 +758,46 @@ public static class Driver
             OverloadedError o => o.RetryAfter?.TotalSeconds,
             _ => null,
         },
+        ["boosters"] = BoosterStatuses(e.Boosters),
     };
 
-    public static JsonObject Model(ModelInfo m)
+    private static JsonObject BoosterStatuses(IReadOnlyDictionary<string, BoosterStatus> boosters)
+    {
+        var o = new JsonObject();
+        foreach (var (name, status) in boosters)
+        {
+            o[name] = new JsonObject { ["status"] = status.Status, ["latency_ms"] = status.LatencyMs };
+        }
+        return o;
+    }
+
+    /// <summary>
+    /// A model entry; the four fine-tuned fields only where <paramref name="expected"/> lists
+    /// them, since a case checks each one it lists (suite 1.11).
+    /// </summary>
+    public static JsonObject Model(ModelInfo m, JsonObject? expected = null)
     {
         var limits = new JsonObject();
         foreach (var (k, v) in m.Limits)
         {
             limits[k] = v?.DeepClone();
         }
-        return new JsonObject { ["name"] = m.Name, ["description"] = m.Description, ["release_date"] = m.ReleaseDate, ["limits"] = limits };
+        var o = new JsonObject { ["name"] = m.Name, ["description"] = m.Description, ["release_date"] = m.ReleaseDate, ["limits"] = limits };
+        var typed = new (string Key, JsonNode? Value)[]
+        {
+            ("fine_tuned", m.FineTuned),
+            ("base", m.Base),
+            ("adapter_version", m.AdapterVersion),
+            ("status", m.Status),
+        };
+        foreach (var (key, value) in typed)
+        {
+            if (expected?.ContainsKey(key) == true)
+            {
+                o[key] = value;
+            }
+        }
+        return o;
     }
 
     /// <summary>A batch from its typed fields, so the fields are what is checked.</summary>

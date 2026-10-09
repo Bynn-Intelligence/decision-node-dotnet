@@ -32,6 +32,7 @@ public class DecisionNodeError : Exception
         RequestId = details.RequestId;
         Reason = details.Reason;
         Body = details.Body;
+        Boosters = details.Boosters ?? BoosterStatus.ParseHeader(null);
     }
 
     /// <summary>The HTTP status, or <c>null</c> when no response arrived.</summary>
@@ -51,6 +52,13 @@ public class DecisionNodeError : Exception
 
     /// <summary>The parsed response body, when it was JSON.</summary>
     public JsonNode? Body { get; }
+
+    /// <summary>
+    /// Each booster the request named, with its status and time, from the
+    /// <c>x-decisionnode-boosters</c> response header, in the request's order, so a caller can
+    /// see which required booster failed. Empty when the header is absent or no response arrived.
+    /// </summary>
+    public IReadOnlyDictionary<string, BoosterStatus> Boosters { get; } = BoosterStatus.ParseHeader(null);
 }
 
 /// <summary>400: the request is not valid for this model.</summary>
@@ -186,5 +194,6 @@ internal sealed record ErrorDetails
     public string? RequestId { get; init; }
     public string? Reason { get; init; }
     public JsonNode? Body { get; init; }
+    public IReadOnlyDictionary<string, BoosterStatus>? Boosters { get; init; }
     public Exception? Inner { get; init; }
 }
