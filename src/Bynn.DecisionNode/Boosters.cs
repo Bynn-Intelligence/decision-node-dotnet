@@ -334,7 +334,7 @@ public sealed class AgeReading : Reading
 /// </summary>
 public sealed class AiGeneratedReading : Reading
 {
-    private AiGeneratedReading(JsonObject raw, double generated, double confidence, string method, TopGenerator topGenerator, string? c2paSigner)
+    private AiGeneratedReading(JsonObject raw, double generated, double confidence, string method, TopGenerator? topGenerator, string? c2paSigner, string? c2pa)
         : base(DecisionNode.Booster.AiGenerated, raw)
     {
         Generated = generated;
@@ -342,6 +342,7 @@ public sealed class AiGeneratedReading : Reading
         Method = method;
         TopGenerator = topGenerator;
         C2paSigner = c2paSigner;
+        C2pa = c2pa;
     }
 
     /// <summary>The probability that the picture was made by a generator, from 0 to 1.</summary>
@@ -356,11 +357,20 @@ public sealed class AiGeneratedReading : Reading
     /// </summary>
     public string Method { get; }
 
-    /// <summary>The likeliest generator.</summary>
-    public TopGenerator TopGenerator { get; }
+    /// <summary>
+    /// The likeliest generator, or <c>null</c> unless the reading says the picture is likely
+    /// generated, and on every <c>c2pa</c> reading.
+    /// </summary>
+    public TopGenerator? TopGenerator { get; }
 
     /// <summary>Who signed the file's Content Credentials, or <c>null</c> when it has none.</summary>
     public string? C2paSigner { get; }
+
+    /// <summary>
+    /// <c>untrusted</c> when the file's Content Credentials validate but their signer is not
+    /// trusted, any other value as received, or <c>null</c> when the reading has none.
+    /// </summary>
+    public string? C2pa { get; }
 
     internal static AiGeneratedReading Read(JsonObject raw)
     {
@@ -368,15 +378,20 @@ public sealed class AiGeneratedReading : Reading
         var generated = Number(raw, "generated");
         var confidence = Number(raw, "confidence");
         var method = Text(raw, "method");
-        var top = raw["top_generator"] is JsonObject t
-            ? new TopGenerator(Text(t, "name"), Number(t, "probability"))
-            : throw new MalformedReading();
-        // The c2pa_signer key is always sent: null when the file carries no Content Credentials.
-        if (!raw.ContainsKey("c2pa_signer"))
+        // The top_generator and c2pa_signer keys are always sent, null when unset; c2pa only
+        // when the file carries Content Credentials.
+        if (!raw.ContainsKey("top_generator") || !raw.ContainsKey("c2pa_signer"))
         {
             throw new MalformedReading();
         }
-        return new AiGeneratedReading(raw, generated, confidence, method, top, OptionalText(raw, "c2pa_signer"));
+        var top = raw["top_generator"] switch
+        {
+            null => null,
+            JsonObject t => new TopGenerator(Text(t, "name"), Number(t, "probability")),
+            _ => throw new MalformedReading(),
+        };
+        return new AiGeneratedReading(
+            raw, generated, confidence, method, top, OptionalText(raw, "c2pa_signer"), OptionalText(raw, "c2pa"));
     }
 }
 

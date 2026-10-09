@@ -14,7 +14,8 @@ public class SpecOneThreeTests
              {"image":"c3d4","faces":0}]},
            "ai_generated":{"version":"ai_generated-v2","status":"ok","latency_ms":340,"results":[
              {"image":"c3d4","generated":0.93,"confidence":0.86,"method":"inference","top_generator":{"name":"gen-a","probability":0.71},"c2pa_signer":null},
-             {"image":"a1b2","generated":0.99,"confidence":1.0,"method":"c2pa","top_generator":{"name":"gen-b","probability":0.8200000000000001},"c2pa_signer":"Example Signer"}]}},
+             {"image":"a1b2","generated":0.99,"confidence":1.0,"method":"c2pa","top_generator":null,"c2pa_signer":"Example Signer"},
+             {"image":"e5f6","generated":0.08,"confidence":0.8200000000000001,"method":"inference","top_generator":null,"c2pa_signer":null,"c2pa":"untrusted","region":{"x":4}}]}},
          "usage":{"input_tokens":341,"output_tokens":0,"booster_tokens":72,"boosters":3}}
         """;
 
@@ -148,7 +149,13 @@ public class SpecOneThreeTests
         var c2pa = Assert.IsType<AiGeneratedReading>(d.Evidence["ai_generated"].Results[1]);
         Assert.Equal("c2pa", c2pa.Method);
         Assert.Equal("Example Signer", c2pa.C2paSigner);
-        Assert.Equal(0.8200000000000001, c2pa.TopGenerator.Probability);
+        Assert.Null(c2pa.TopGenerator);
+        Assert.Null(c2pa.C2pa);
+        var photo = Assert.IsType<AiGeneratedReading>(d.Evidence["ai_generated"].Results[2]);
+        Assert.Null(photo.TopGenerator);
+        Assert.Equal("untrusted", photo.C2pa);
+        Assert.Equal(0.8200000000000001, photo.Confidence);
+        Assert.Null(inference.C2pa);
         Assert.Equal("ai_generated", c2pa.Booster);
         Assert.Equal(72, d.Usage.BoosterTokens);
         Assert.Equal(3, d.Usage.Boosters);
@@ -191,7 +198,8 @@ public class SpecOneThreeTests
                 {"image":"a","generated":0.5,"confidence":0.5,"method":"inference","top_generator":"x","c2pa_signer":null},
                 {"image":"b","generated":true,"confidence":0.5,"method":"inference"},
                 {"image":"c","generated":0.5,"confidence":0.5,"method":"inference","c2pa_signer":3},
-                {"image":"d","generated":0.5,"confidence":0.5,"method":"inference","top_generator":null,"c2pa_signer":null},
+                {"image":"d","generated":0.5,"confidence":0.5,"method":"inference","top_generator":null,"c2pa_signer":null,"c2pa":true},
+                {"image":"g","generated":0.5,"confidence":0.5,"method":"inference","c2pa_signer":null},
                 {"image":"e","generated":0.5,"confidence":0.5,"method":"inference","top_generator":{"name":"gen-a","probability":0.1}},
                 {"image":"f","generated":0.5,"confidence":0.5,"method":"other","top_generator":{"name":"gen-a","probability":0.1},"c2pa_signer":null}]}}}
             """;
@@ -200,8 +208,8 @@ public class SpecOneThreeTests
         Assert.All(m.Evidence!["age"].Results, r => Assert.IsType<UnknownReading>(r));
         Assert.Equal(7, (int)m.Evidence["age"].Results[3].Raw!);
         var readings = m.Evidence["ai_generated"].Results;
-        Assert.All(readings.Take(5), r => Assert.IsType<UnknownReading>(r));
-        var other = Assert.IsType<AiGeneratedReading>(readings[5]);
+        Assert.All(readings.Take(6), r => Assert.IsType<UnknownReading>(r));
+        var other = Assert.IsType<AiGeneratedReading>(readings[6]);
         Assert.Equal("other", other.Method);
         Assert.Null(other.C2paSigner);
     }
