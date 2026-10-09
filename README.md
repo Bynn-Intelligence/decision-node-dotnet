@@ -313,7 +313,7 @@ A name alone is sent as the name (`"age"`), and so is `Booster.Of("age")` with n
 | `AiGeneratedReading` | `Image`, `Generated` (the probability the picture was made by a generator), `Confidence`, `Method` (`inference` from the pixels, or `c2pa` from the file's Content Credentials), `TopGenerator` (`Name`, `Probability`; `null` unless the picture is likely generated), `C2paSigner` (`null` when the file has no Content Credentials), `C2pa` (`untrusted` when the file's Content Credentials validate but their signer is not trusted, else `null`) |
 | `UnknownReading` | A reading of a booster this version does not know, or one with a missing or wrongly typed field, with its `Raw` fields; the decision does not fail |
 
-Every booster call billed is charged at that booster's price, listed on the [pricing page](https://decisionnode.com/docs/pricing#boosters), and drawn from your prepaid balance with the request's tokens; a booster that timed out or failed is free, a picture the same booster read for your workspace in the last hour is not billed again, and a refused request bills no booster call. The readings' tokens count as input tokens at the model's price.
+Every booster call billed is charged at that booster's price, listed on the [pricing page](https://decisionnode.com/docs/pricing#boosters), and drawn from your prepaid balance with the request's tokens; a booster that timed out or failed is free, and a refused request bills no booster call. The readings' tokens count as input tokens at the model's price.
 
 | Error | When |
 |---|---|

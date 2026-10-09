@@ -195,8 +195,9 @@ public sealed class Evidence
     public double? LatencyMs { get; }
 
     /// <summary>
-    /// The calls of this booster billed on this request; <c>null</c> when the server did not
-    /// send it. A picture the same booster read for the workspace in the last hour is not billed again.
+    /// The calls of this booster billed on this request: one per image read with status
+    /// <c>ok</c>, none for a booster that timed out or failed; <c>null</c> when the server did
+    /// not send it.
     /// </summary>
     public long? BilledCalls { get; }
 
