@@ -334,7 +334,7 @@ public sealed class AgeReading : Reading
 /// </summary>
 public sealed class AiGeneratedReading : Reading
 {
-    private AiGeneratedReading(JsonObject raw, double generated, double confidence, string method, TopGenerator? topGenerator, string? c2paSigner)
+    private AiGeneratedReading(JsonObject raw, double generated, double confidence, string method, TopGenerator topGenerator, string? c2paSigner)
         : base(DecisionNode.Booster.AiGenerated, raw)
     {
         Generated = generated;
@@ -356,8 +356,8 @@ public sealed class AiGeneratedReading : Reading
     /// </summary>
     public string Method { get; }
 
-    /// <summary>The likeliest generator, or <c>null</c> when the reading names none.</summary>
-    public TopGenerator? TopGenerator { get; }
+    /// <summary>The likeliest generator.</summary>
+    public TopGenerator TopGenerator { get; }
 
     /// <summary>Who signed the file's Content Credentials, or <c>null</c> when it has none.</summary>
     public string? C2paSigner { get; }
@@ -368,16 +368,13 @@ public sealed class AiGeneratedReading : Reading
         var generated = Number(raw, "generated");
         var confidence = Number(raw, "confidence");
         var method = Text(raw, "method");
-        TopGenerator? top = null;
-        switch (raw["top_generator"])
+        var top = raw["top_generator"] is JsonObject t
+            ? new TopGenerator(Text(t, "name"), Number(t, "probability"))
+            : throw new MalformedReading();
+        // The c2pa_signer key is always sent: null when the file carries no Content Credentials.
+        if (!raw.ContainsKey("c2pa_signer"))
         {
-            case null:
-                break;
-            case JsonObject t:
-                top = new TopGenerator(Text(t, "name"), Number(t, "probability"));
-                break;
-            default:
-                throw new MalformedReading();
+            throw new MalformedReading();
         }
         return new AiGeneratedReading(raw, generated, confidence, method, top, OptionalText(raw, "c2pa_signer"));
     }

@@ -148,7 +148,7 @@ public class SpecOneThreeTests
         var c2pa = Assert.IsType<AiGeneratedReading>(d.Evidence["ai_generated"].Results[1]);
         Assert.Equal("c2pa", c2pa.Method);
         Assert.Equal("Example Signer", c2pa.C2paSigner);
-        Assert.Equal(0.8200000000000001, c2pa.TopGenerator!.Probability);
+        Assert.Equal(0.8200000000000001, c2pa.TopGenerator.Probability);
         Assert.Equal("ai_generated", c2pa.Booster);
         Assert.Equal(72, d.Usage.BoosterTokens);
         Assert.Equal(3, d.Usage.Boosters);
@@ -191,17 +191,19 @@ public class SpecOneThreeTests
                 {"image":"a","generated":0.5,"confidence":0.5,"method":"inference","top_generator":"x","c2pa_signer":null},
                 {"image":"b","generated":true,"confidence":0.5,"method":"inference"},
                 {"image":"c","generated":0.5,"confidence":0.5,"method":"inference","c2pa_signer":3},
-                {"image":"d","generated":0.5,"confidence":0.5,"method":"other"}]}}}
+                {"image":"d","generated":0.5,"confidence":0.5,"method":"inference","top_generator":null,"c2pa_signer":null},
+                {"image":"e","generated":0.5,"confidence":0.5,"method":"inference","top_generator":{"name":"gen-a","probability":0.1}},
+                {"image":"f","generated":0.5,"confidence":0.5,"method":"other","top_generator":{"name":"gen-a","probability":0.1},"c2pa_signer":null}]}}}
             """;
         using var dn2 = Client(new StubHandler((_, _) => Ok(malformed)));
         var m = await dn2.DecideAsync("s", OneTruth());
         Assert.All(m.Evidence!["age"].Results, r => Assert.IsType<UnknownReading>(r));
         Assert.Equal(7, (int)m.Evidence["age"].Results[3].Raw!);
         var readings = m.Evidence["ai_generated"].Results;
-        Assert.All(readings.Take(3), r => Assert.IsType<UnknownReading>(r));
-        var other = Assert.IsType<AiGeneratedReading>(readings[3]);
+        Assert.All(readings.Take(5), r => Assert.IsType<UnknownReading>(r));
+        var other = Assert.IsType<AiGeneratedReading>(readings[5]);
         Assert.Equal("other", other.Method);
-        Assert.Null(other.TopGenerator);
+        Assert.Null(other.C2paSigner);
     }
 
     [Fact]

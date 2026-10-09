@@ -722,7 +722,7 @@ public static class Driver
             ["generated"] = g.Generated,
             ["confidence"] = g.Confidence,
             ["method"] = g.Method,
-            ["top_generator"] = g.TopGenerator is { } t ? new JsonObject { ["name"] = t.Name, ["probability"] = t.Probability } : null,
+            ["top_generator"] = new JsonObject { ["name"] = g.TopGenerator.Name, ["probability"] = g.TopGenerator.Probability },
             ["c2pa_signer"] = g.C2paSigner,
         },
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
