@@ -10,7 +10,7 @@ permissions:
 env:
   # The conformance suite commit this library is tested against (suite 1.11, for
   # specification 1.3). The one place it is set; move it forward deliberately, never to a branch.
-  DECISIONNODE_CONFORMANCE_REF: 2df4c262a322f470a589a38c321ad44b7121b1e9
+  DECISIONNODE_CONFORMANCE_REF: 49c92b052242a99a858040f66b05c1dca087e339
 
 jobs:
   test:
