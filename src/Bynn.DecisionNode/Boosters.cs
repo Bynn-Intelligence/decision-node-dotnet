@@ -38,12 +38,13 @@ public sealed class Booster
     /// <summary>Reads any picture: how likely it was made by an image generator, and its Content Credentials.</summary>
     public const string AiGenerated = "ai_generated";
 
-    /// <summary>Reads any picture: how many faces it shows and where.</summary>
+    /// <summary>Reads any picture: how many faces it shows and where. Its readings are <see cref="FaceDetectionReading"/>s.</summary>
     public const string FaceDetection = "face_detection";
 
     /// <summary>
     /// Reads a picture of a person: whether a face matches an entry of a wanted-persons list. Off
-    /// for a workspace until it is enabled for it; takes the option <c>threshold</c>.
+    /// for a workspace until it is enabled for it; takes the option <c>threshold</c>, sent as
+    /// given. Its readings are <see cref="WantedPersonReading"/>s.
     /// </summary>
     public const string WantedPerson = "wanted_person";
 
@@ -244,7 +245,8 @@ public sealed class Evidence
 
 /// <summary>
 /// One booster's reading of one image: an <see cref="AgeReading"/>, an
-/// <see cref="AiGeneratedReading"/>, an <see cref="OcrReading"/> or, for a booster this version of the library does not know
+/// <see cref="AiGeneratedReading"/>, an <see cref="OcrReading"/>, a <see cref="FaceDetectionReading"/>,
+/// a <see cref="WantedPersonReading"/> or, for a booster this version of the library does not know
 /// or a reading with a missing or wrongly typed field, an <see cref="UnknownReading"/> holding
 /// its raw fields. A reading never fails the decision. Numbers are passed through as received.
 /// </summary>
@@ -279,6 +281,8 @@ public abstract class Reading
                 DecisionNode.Booster.Age => AgeReading.Read(raw),
                 DecisionNode.Booster.AiGenerated => AiGeneratedReading.Read(raw),
                 DecisionNode.Booster.Ocr => OcrReading.Read(raw),
+                DecisionNode.Booster.FaceDetection => FaceDetectionReading.Read(raw),
+                DecisionNode.Booster.WantedPerson => WantedPersonReading.Read(raw),
                 _ => new UnknownReading(booster, raw),
             };
         }
@@ -309,6 +313,33 @@ public abstract class Reading
     /// <summary>A field that may be absent or <c>null</c>; present, it must be a number.</summary>
     private protected static double? OptionalNumber(JsonObject raw, string field) =>
         raw[field] is null ? null : Number(raw, field);
+
+    /// <summary>A JSON integer of at least 0, written without a fraction or an exponent.</summary>
+    private protected static long Count(JsonObject raw, string field)
+    {
+        if (raw[field] is JsonValue v && v.GetValueKind() == System.Text.Json.JsonValueKind.Number)
+        {
+            if (v.TryGetValue(out System.Text.Json.JsonElement e) ? e.TryGetInt64(out var n) && IsInteger(e.GetRawText()) && n >= 0 : v.TryGetValue(out n) && n >= 0)
+            {
+                return n;
+            }
+        }
+        throw new MalformedReading();
+    }
+
+    private static bool IsInteger(string text) => text.All(c => c is '-' || char.IsAsciiDigit(c));
+
+    /// <summary>A list of objects, each read by <paramref name="read"/>.</summary>
+    private protected static IReadOnlyList<T> List<T>(JsonObject raw, string field, Func<JsonObject, T> read) =>
+        raw[field] is JsonArray list
+            ? list.Select(item => item is JsonObject o ? read(o) : throw new MalformedReading()).ToList()
+            : throw new MalformedReading();
+
+    /// <summary>A box: its four corners as numbers.</summary>
+    private protected static FaceBox Box(JsonObject raw, string field) =>
+        raw[field] is JsonObject b
+            ? new FaceBox(Number(b, "x1"), Number(b, "y1"), Number(b, "x2"), Number(b, "y2"))
+            : throw new MalformedReading();
 
     /// <summary>A field that may be absent or <c>null</c>; present, it must be a string.</summary>
     private protected static string? OptionalText(JsonObject raw, string field) =>
@@ -461,6 +492,81 @@ public sealed class OcrReading : Reading
         return new OcrReading(raw, text, truncated);
     }
 }
+
+/// <summary>
+/// The <c>face_detection</c> booster's reading of one image: how many faces it shows and where,
+/// the faces by confidence. <see cref="Faces"/> counts every face found and may exceed the list.
+/// </summary>
+public sealed class FaceDetectionReading : Reading
+{
+    private FaceDetectionReading(JsonObject raw, long faces, IReadOnlyList<FaceDetection> detections)
+        : base(DecisionNode.Booster.FaceDetection, raw)
+    {
+        Faces = faces;
+        Detections = detections;
+    }
+
+    /// <summary>How many faces were found.</summary>
+    public long Faces { get; }
+
+    /// <summary>The faces, in the order received.</summary>
+    public IReadOnlyList<FaceDetection> Detections { get; }
+
+    internal static FaceDetectionReading Read(JsonObject raw)
+    {
+        _ = Text(raw, "image");
+        var faces = Count(raw, "faces");
+        var detections = List(raw, "detections", d => new FaceDetection(Box(d, "box"), Number(d, "confidence")));
+        return new FaceDetectionReading(raw, faces, detections);
+    }
+}
+
+/// <summary>One face of a <see cref="FaceDetectionReading"/>.</summary>
+/// <param name="Box">Where the face is.</param>
+/// <param name="Confidence">How sure the reading is that it is a face, from 0 to 1.</param>
+public sealed record FaceDetection(FaceBox Box, double Confidence);
+
+/// <summary>
+/// The <c>wanted_person</c> booster's reading of one image: the faces that match an entry of the
+/// workspace's wanted-persons list, by score. <see cref="Faces"/> counts the faces checked and may
+/// exceed the list.
+/// </summary>
+public sealed class WantedPersonReading : Reading
+{
+    private WantedPersonReading(JsonObject raw, long faces, IReadOnlyList<WantedMatch> matches)
+        : base(DecisionNode.Booster.WantedPerson, raw)
+    {
+        Faces = faces;
+        Matches = matches;
+    }
+
+    /// <summary>How many faces were checked.</summary>
+    public long Faces { get; }
+
+    /// <summary>The matching faces, in the order received; empty when none matches.</summary>
+    public IReadOnlyList<WantedMatch> Matches { get; }
+
+    internal static WantedPersonReading Read(JsonObject raw)
+    {
+        _ = Text(raw, "image");
+        var faces = Count(raw, "faces");
+        var matches = List(raw, "matches", m => new WantedMatch(Box(m, "box"), Number(m, "score"), Text(m, "reference")));
+        return new WantedPersonReading(raw, faces, matches);
+    }
+}
+
+/// <summary>One match of a <see cref="WantedPersonReading"/>.</summary>
+/// <param name="Box">Where the matching face is.</param>
+/// <param name="Score">How closely it matches the list entry.</param>
+/// <param name="Reference">The list entry it matches, as received.</param>
+public sealed record WantedMatch(FaceBox Box, double Score, string Reference);
+
+/// <summary>
+/// A face's box: its top-left (<c>X1</c>, <c>Y1</c>) and bottom-right (<c>X2</c>, <c>Y2</c>)
+/// corners, exactly as received (pixels, or fractions of the image when the request's place
+/// questions ask for normalized units); never converted or rounded.
+/// </summary>
+public sealed record FaceBox(double X1, double Y1, double X2, double Y2);
 
 /// <summary>The likeliest image generator of an <see cref="AiGeneratedReading"/>.</summary>
 /// <param name="Name">The generator's name, as received.</param>

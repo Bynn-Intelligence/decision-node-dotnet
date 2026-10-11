@@ -358,16 +358,60 @@ public class SpecOneThreeTests
     }
 
     [Fact]
-    public async Task AFaceDetectionReadingIsAGenericReading()
+    public async Task FaceDetectionReadingsAreTyped()
     {
         const string body = """
             {"answers":{},"evidence":{
-              "face_detection":{"version":"face_detection-v1","status":"ok","latency_ms":40,"billed_calls":1,"results":[{"image":"a","faces":1}]}}}
+              "face_detection":{"version":"face_detection-v1","status":"ok","latency_ms":40,"billed_calls":3,"results":[
+                {"image":"gate","faces":70,"detections":[{"box":{"x1":412,"y1":188,"x2":486,"y2":274},"confidence":0.98},{"box":{"x1":0.3219,"y1":0.2611,"x2":0.3797,"y2":0.3806},"confidence":0.74}],"note":"x"},
+                {"image":"yard","faces":0,"detections":[]},
+                {"image":"a","faces":1},
+                {"image":"a","faces":1,"detections":{}},
+                {"image":"a","faces":-1,"detections":[]},
+                {"image":"a","faces":1.0,"detections":[]},
+                {"image":"a","faces":true,"detections":[]},
+                {"image":"a","faces":1,"detections":[{"box":{"x1":1,"y1":1,"x2":2},"confidence":0.5}]},
+                {"image":"a","faces":1,"detections":[{"box":{"x1":1,"y1":1,"x2":2,"y2":"3"},"confidence":0.5}]},
+                {"image":"a","faces":1,"detections":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3}}]},
+                {"image":"a","faces":1,"detections":[7]}]}}}
             """;
         using var dn = Client(new StubHandler((_, _) => Ok(body)));
-        var d = await dn.DecideAsync("s", OneTruth());
-        var faces = Assert.IsType<UnknownReading>(d.Evidence!["face_detection"].Results[0]);
-        Assert.Equal("face_detection", faces.Booster);
+        var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["face_detection"].Results;
+        var gate = Assert.IsType<FaceDetectionReading>(results[0]);
+        Assert.Equal(("gate", 70L, 2), (gate.Image, gate.Faces, gate.Detections.Count));
+        Assert.Equal(new FaceDetection(new FaceBox(412, 188, 486, 274), 0.98), gate.Detections[0]);
+        // Boxes are kept as sent, never converted or rounded.
+        Assert.Equal(new FaceBox(0.3219, 0.2611, 0.3797, 0.3806), gate.Detections[1].Box);
+        var yard = Assert.IsType<FaceDetectionReading>(results[1]);
+        Assert.Equal(0, yard.Faces);
+        Assert.Empty(yard.Detections);
+        // No list, a list that is not a list, a negative, fractional or boolean count, a box
+        // missing a corner or with a corner that is not a number, no confidence, an item that is
+        // not an object: generic readings.
+        Assert.All(results.Skip(2), r => Assert.IsType<UnknownReading>(r));
+    }
+
+    [Fact]
+    public async Task WantedPersonReadingsAreTyped()
+    {
+        const string body = """
+            {"answers":{},"evidence":{
+              "wanted_person":{"version":"wanted_person-v1","status":"ok","latency_ms":40,"billed_calls":2,"results":[
+                {"image":"gate","faces":2,"matches":[{"box":{"x1":412,"y1":188,"x2":486,"y2":274},"score":0.93,"reference":"wl_4Q7Z:entry-0192"}]},
+                {"image":"yard","faces":1,"matches":[]},
+                {"image":"a","faces":1},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9}]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"reference":7}]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":"high","reference":"r"}]},
+                {"image":"a","faces":"2","matches":[]}]}}}
+            """;
+        using var dn = Client(new StubHandler((_, _) => Ok(body)));
+        var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["wanted_person"].Results;
+        var gate = Assert.IsType<WantedPersonReading>(results[0]);
+        Assert.Equal(("gate", 2L), (gate.Image, gate.Faces));
+        Assert.Equal(new WantedMatch(new FaceBox(412, 188, 486, 274), 0.93, "wl_4Q7Z:entry-0192"), Assert.Single(gate.Matches));
+        Assert.Empty(Assert.IsType<WantedPersonReading>(results[1]).Matches);
+        Assert.All(results.Skip(2), r => Assert.IsType<UnknownReading>(r));
     }
 
     [Fact]

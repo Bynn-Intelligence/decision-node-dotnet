@@ -743,8 +743,24 @@ public static class Driver
             ["text"] = o.Text,
             ["truncated"] = o.Truncated,
         },
+        FaceDetectionReading f => new JsonObject
+        {
+            ["kind"] = "face_detection",
+            ["image"] = f.Image,
+            ["faces"] = f.Faces,
+            ["detections"] = new JsonArray(f.Detections.Select(d => (JsonNode)new JsonObject { ["box"] = Box(d.Box), ["confidence"] = d.Confidence }).ToArray()),
+        },
+        WantedPersonReading w => new JsonObject
+        {
+            ["kind"] = "wanted_person",
+            ["image"] = w.Image,
+            ["faces"] = w.Faces,
+            ["matches"] = new JsonArray(w.Matches.Select(m => (JsonNode)new JsonObject { ["box"] = Box(m.Box), ["score"] = m.Score, ["reference"] = m.Reference }).ToArray()),
+        },
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
     };
+
+    private static JsonObject Box(FaceBox b) => new() { ["x1"] = b.X1, ["y1"] = b.Y1, ["x2"] = b.X2, ["y2"] = b.Y2 };
 
     public static JsonObject Decision(Decision d) => new()
     {
