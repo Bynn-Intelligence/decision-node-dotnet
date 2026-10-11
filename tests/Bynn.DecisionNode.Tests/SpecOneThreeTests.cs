@@ -397,7 +397,7 @@ public class SpecOneThreeTests
         const string body = """
             {"answers":{},"evidence":{
               "wanted_person":{"version":"wanted_person-v1","status":"ok","latency_ms":40,"billed_calls":2,"results":[
-                {"image":"gate","faces":2,"matches":[{"box":{"x1":412,"y1":188,"x2":486,"y2":274},"score":0.93,"reference":"wl_4Q7Z:entry-0192"}]},
+                {"image":"gate","faces":2,"matches":[{"box":{"x1":412,"y1":188,"x2":486,"y2":274},"score":0.93,"reference":"wanted:2024-12345"}]},
                 {"image":"yard","faces":1,"matches":[]},
                 {"image":"a","faces":1},
                 {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9}]},
@@ -409,7 +409,7 @@ public class SpecOneThreeTests
         var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["wanted_person"].Results;
         var gate = Assert.IsType<WantedPersonReading>(results[0]);
         Assert.Equal(("gate", 2L), (gate.Image, gate.Faces));
-        Assert.Equal(new WantedMatch(new FaceBox(412, 188, 486, 274), 0.93, "wl_4Q7Z:entry-0192"), Assert.Single(gate.Matches));
+        Assert.Equal(new WantedMatch(new FaceBox(412, 188, 486, 274), 0.93, "wanted:2024-12345"), Assert.Single(gate.Matches));
         Assert.Empty(Assert.IsType<WantedPersonReading>(results[1]).Matches);
         Assert.All(results.Skip(2), r => Assert.IsType<UnknownReading>(r));
     }
