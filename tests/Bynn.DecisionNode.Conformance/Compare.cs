@@ -8,7 +8,7 @@ namespace Bynn.DecisionNode.Conformance;
 public static class Compare
 {
     /// <summary>Keys whose values compare whole, even inside a partial expectation.</summary>
-    private static readonly HashSet<string> Exact = new() { "probabilities", "legend", "raw", "entries", "safety", "body", "limits", "evidence", "boosters", "fallback" };
+    private static readonly HashSet<string> Exact = new() { "probabilities", "legend", "raw", "entries", "safety", "body", "limits", "evidence", "boosters", "fallback", "cost" };
 
     /// <summary>
     /// Keys compared whole and in their key order too (suite 1.11): a decision's evidence is

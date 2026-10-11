@@ -686,6 +686,9 @@ public static class Driver
         ["video_seconds"] = u.VideoSeconds,
         ["booster_tokens"] = u.BoosterTokens,
         ["boosters"] = u.Boosters,
+        ["cost"] = u.Cost is { } c
+            ? new JsonObject { ["usd"] = c.Usd, ["model_usd"] = c.ModelUsd, ["boosters_usd"] = c.BoostersUsd, ["free_tier"] = c.FreeTier }
+            : null,
     };
 
     /// <summary>A decision's evidence by booster name, in order; <c>null</c> when it has none.</summary>

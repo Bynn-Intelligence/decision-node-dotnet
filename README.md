@@ -108,6 +108,8 @@ var results = await dn.DecideManyAsync(tickets.Select(t => new DecideRequest
 
 Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings`, `Evidence`, `Fallback` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos); for a request with boosters, `Evidence`, `Usage.BoosterTokens` and `Usage.Boosters` say what the boosters read (see Boosters).
 
+`Usage.Cost` is what the answer cost, in USD exactly as the API booked it: `Usd` (the amount debited for this answer), `ModelUsd` (the model's part, 0 when the free tier covered it), `BoostersUsd` (the boosters' part) and `FreeTier` (`true` when the free tier covered the model's part). Read `Usd` as given rather than adding the parts, since the parts summed as doubles can differ from the booked amount in the last digit. Batch result lines and session replies carry their own `Usage.Cost`. It is `null` when the response does not carry it.
+
 `GateAsync` sends the state `{"action": ..., "context": ...}` and three questions with fixed wording, the same in every official DecisionNode SDK:
 
 | Id | Type | Instructions |

@@ -18,6 +18,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - The API's 25 MiB body limit: `DecisionNodeClient.MaxBodyBytes` (26,214,400). A body over it, measured as it would be sent (inline images and frames in it, an image that would be uploaded named by its upload id), throws the new `RequestTooLargeError` before anything is sent or uploaded, on `DecideAsync`, the helpers, `DecideManyAsync` (for the whole call), `CheckRequest` and each batch line. The API's `413` is a `RequestTooLargeError` too, never retried.
 
 - An image id longer than 64 characters (counted as Unicode code points) throws `BadRequestError` (`api_usage_error`, `Image <n>: its id is longer than 64 characters.`) before anything is sent, checked image by image after the empty-id check and before the duplicate check.
+- `Usage.Cost`: what each answer cost, as the API sends it (`Usd`, `ModelUsd`, `BoostersUsd`, `FreeTier`, and the raw object), on decisions, batch result lines and session replies; `null` when absent, never zeros, and `Usd` is never computed from the parts.
 
 ### Changed
 

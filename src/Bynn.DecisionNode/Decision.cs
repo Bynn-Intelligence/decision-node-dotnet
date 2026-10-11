@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Bynn.DecisionNode.Internal;
 
@@ -129,7 +130,41 @@ public sealed class Decision
 /// <param name="VideoSeconds">The seconds of the video windows read, as received; <c>null</c> for a request without videos.</param>
 /// <param name="BoosterTokens">The share of <paramref name="InputTokens"/> the boosters' readings take; <c>null</c> for a request without boosters.</param>
 /// <param name="Boosters">The booster calls billed; <c>null</c> for a request without boosters.</param>
-public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null, long? BoosterTokens = null, long? Boosters = null);
+/// <param name="Cost">What the answer cost, as the API sent it; <c>null</c> when the response does not say.</param>
+public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null, long? BoosterTokens = null, long? Boosters = null, Cost? Cost = null);
+
+/// <summary>
+/// What one answer cost (<c>usage.cost</c>), every amount in USD exactly as the API sent it: the
+/// amount booked, never summed or recomputed by the client. A value that is absent or of another
+/// type is <c>null</c>, never 0.
+/// </summary>
+/// <param name="Usd">The amount booked for the answer: its model part plus its boosters part, as the API booked it.</param>
+/// <param name="ModelUsd">The model's part; 0 when the free tier covered the request.</param>
+/// <param name="BoostersUsd">The boosters' part; 0 for an answer without billed booster calls.</param>
+/// <param name="FreeTier"><c>true</c> when the free tier covered the model's part.</param>
+public sealed record Cost(double? Usd, double? ModelUsd, double? BoostersUsd, bool? FreeTier)
+{
+    /// <summary>The cost object exactly as received.</summary>
+    public JsonObject? Raw { get; init; }
+
+    /// <summary>Two costs are equal when their four values are.</summary>
+    public bool Equals(Cost? other) =>
+        other is not null && Usd == other.Usd && ModelUsd == other.ModelUsd && BoostersUsd == other.BoostersUsd && FreeTier == other.FreeTier;
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Usd, ModelUsd, BoostersUsd, FreeTier);
+
+    internal static Cost? Of(JsonNode? node)
+    {
+        if (node is not JsonObject cost)
+        {
+            return null;
+        }
+        double? Amount(string key) => JsonValues.TryDouble(cost[key], out var d) ? d : null;
+        bool? free = cost["free_tier"] is JsonValue v && v.GetValueKind() is JsonValueKind.True or JsonValueKind.False ? v.GetValue<bool>() : null;
+        return new Cost(Amount("usd"), Amount("model_usd"), Amount("boosters_usd"), free) { Raw = cost };
+    }
+}
 
 /// <summary>A model listed by <c>GET /v1/models</c>.</summary>
 public sealed class ModelInfo
