@@ -38,6 +38,21 @@ public sealed class Booster
     /// <summary>Reads any picture: how likely it was made by an image generator, and its Content Credentials.</summary>
     public const string AiGenerated = "ai_generated";
 
+    /// <summary>Reads any picture: how many faces it shows and where.</summary>
+    public const string FaceDetection = "face_detection";
+
+    /// <summary>
+    /// Reads a picture of a person: whether a face matches an entry of a wanted-persons list. Off
+    /// for a workspace until it is enabled for it; takes the option <c>threshold</c>.
+    /// </summary>
+    public const string WantedPerson = "wanted_person";
+
+    /// <summary>
+    /// Reads any picture: the text it shows, or what the option <c>prompt</c> (at most 500
+    /// characters) asks it to read.
+    /// </summary>
+    public const string Ocr = "ocr";
+
     private readonly JsonNode _wire;
 
     private Booster(JsonNode wire)

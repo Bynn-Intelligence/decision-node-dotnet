@@ -343,4 +343,33 @@ public class SpecOneThreeTests
         Assert.Equal("bare", Booster.Of("bare").Name);
         Assert.Throws<ArgumentNullException>(() => Booster.Of(null!));
     }
+
+    [Fact]
+    public void TheNewerBoosterNamesAndTheirOptions()
+    {
+        Assert.Equal(("face_detection", "wanted_person", "ocr"), (Booster.FaceDetection, Booster.WantedPerson, Booster.Ocr));
+        Assert.Equal("\"face_detection\"", Booster.Of(Booster.FaceDetection).ToString());
+        Assert.Equal(
+            """{"name":"ocr","options":{"prompt":"the invoice total and date"}}""",
+            Booster.Of(Booster.Ocr, options: new { prompt = "the invoice total and date" }).ToJson().ToJsonString());
+        Assert.Equal(
+            """{"name":"wanted_person","options":{"threshold":0.9}}""",
+            Booster.Of(Booster.WantedPerson, options: new { threshold = 0.9 }).ToJson().ToJsonString());
+    }
+
+    [Fact]
+    public async Task ReadingsOfTheNewerBoostersAreGenericReadings()
+    {
+        const string body = """
+            {"answers":{},"evidence":{
+              "face_detection":{"version":"face_detection-v1","status":"ok","latency_ms":40,"billed_calls":1,"results":[{"image":"a","faces":1}]},
+              "ocr":{"version":"ocr-v1","status":"ok","latency_ms":90,"billed_calls":1,"results":[{"image":"a","text":"Total 42.00"}]}}}
+            """;
+        using var dn = Client(new StubHandler((_, _) => Ok(body)));
+        var d = await dn.DecideAsync("s", OneTruth());
+        var faces = Assert.IsType<UnknownReading>(d.Evidence!["face_detection"].Results[0]);
+        Assert.Equal("face_detection", faces.Booster);
+        var text = Assert.IsType<UnknownReading>(d.Evidence["ocr"].Results[0]);
+        Assert.Equal("Total 42.00", (string)text.Raw!["text"]!);
+    }
 }
