@@ -38,20 +38,15 @@ public sealed class Booster
     /// <summary>Reads any picture: how likely it was made by an image generator, and its Content Credentials.</summary>
     public const string AiGenerated = "ai_generated";
 
-    /// <summary>Reads any picture: how many faces it shows and where. Its readings are <see cref="FaceDetectionReading"/>s.</summary>
+    /// <summary>The name <c>face_detection</c>. Its readings are <see cref="FaceDetectionReading"/>s.</summary>
     public const string FaceDetection = "face_detection";
 
-    /// <summary>
-    /// Reads a picture of a person: whether a face matches an entry of a wanted-persons list. Off
-    /// for a workspace until it is enabled for it; takes the option <c>threshold</c>, sent as
-    /// given. Its readings are <see cref="WantedPersonReading"/>s.
-    /// </summary>
+    /// <summary>The name <c>wanted_person</c>. Its readings are <see cref="WantedPersonReading"/>s.</summary>
     public const string WantedPerson = "wanted_person";
 
     /// <summary>
-    /// Reads any picture: the text it shows, or what the option <c>prompt</c> (at most 2,000
-    /// characters, judged by the API; nothing is checked locally) asks it to read. Its readings
-    /// are <see cref="OcrReading"/>s.
+    /// The name <c>ocr</c>. Its readings are <see cref="OcrReading"/>s. A request naming it has its
+    /// own timeout rule (see <see cref="DecisionNodeClient.Timeout"/>).
     /// </summary>
     public const string Ocr = "ocr";
 
@@ -363,7 +358,7 @@ public sealed class AgeReading : Reading
         Confidence = confidence;
     }
 
-    /// <summary>How many faces were found.</summary>
+    /// <summary>The <c>faces</c> count, as received.</summary>
     public long Faces { get; }
 
     /// <summary>The age read, in years; <c>null</c> when no face was found.</summary>
@@ -463,8 +458,7 @@ public sealed class AiGeneratedReading : Reading
 }
 
 /// <summary>
-/// The <c>ocr</c> booster's reading of one image: the text the picture shows, in reading order,
-/// or the answer to the booster's <c>prompt</c>. A picture without text reads the empty string.
+/// A reading of the <c>ocr</c> booster, its fields as received.
 /// </summary>
 public sealed class OcrReading : Reading
 {
@@ -475,10 +469,10 @@ public sealed class OcrReading : Reading
         Truncated = truncated;
     }
 
-    /// <summary>The text read, exactly as received; <c>""</c> when the picture shows none.</summary>
+    /// <summary>The <c>text</c>, exactly as received, <c>""</c> included.</summary>
     public new string Text { get; }
 
-    /// <summary><c>true</c> when the reading was cut short, <c>false</c> when it is whole.</summary>
+    /// <summary>The <c>truncated</c> flag, as received.</summary>
     public bool Truncated { get; }
 
     internal static OcrReading Read(JsonObject raw)
@@ -494,8 +488,8 @@ public sealed class OcrReading : Reading
 }
 
 /// <summary>
-/// The <c>face_detection</c> booster's reading of one image: how many faces it shows and where,
-/// the faces by confidence. <see cref="Faces"/> counts every face found and may exceed the list.
+/// A reading of the <c>face_detection</c> booster, its fields as received. <see cref="Faces"/>
+/// may exceed the list.
 /// </summary>
 public sealed class FaceDetectionReading : Reading
 {
@@ -509,7 +503,7 @@ public sealed class FaceDetectionReading : Reading
     /// <summary>How many faces were found.</summary>
     public long Faces { get; }
 
-    /// <summary>The faces, in the order received.</summary>
+    /// <summary>The <c>detections</c>, in the order received.</summary>
     public IReadOnlyList<FaceDetection> Detections { get; }
 
     internal static FaceDetectionReading Read(JsonObject raw)
@@ -521,15 +515,14 @@ public sealed class FaceDetectionReading : Reading
     }
 }
 
-/// <summary>One face of a <see cref="FaceDetectionReading"/>.</summary>
-/// <param name="Box">Where the face is.</param>
-/// <param name="Confidence">How sure the reading is that it is a face, from 0 to 1.</param>
+/// <summary>One entry of a <see cref="FaceDetectionReading"/>'s detections.</summary>
+/// <param name="Box">Its box.</param>
+/// <param name="Confidence">Its <c>confidence</c>, as received.</param>
 public sealed record FaceDetection(FaceBox Box, double Confidence);
 
 /// <summary>
-/// The <c>wanted_person</c> booster's reading of one image: the faces that match an entry of the
-/// workspace's wanted-persons list, by score. <see cref="Faces"/> counts the faces checked and may
-/// exceed the list.
+/// A reading of the <c>wanted_person</c> booster, its fields as received. <see cref="Faces"/>
+/// may exceed the list.
 /// </summary>
 public sealed class WantedPersonReading : Reading
 {
@@ -540,10 +533,10 @@ public sealed class WantedPersonReading : Reading
         Matches = matches;
     }
 
-    /// <summary>How many faces were checked.</summary>
+    /// <summary>The <c>faces</c> count, as received.</summary>
     public long Faces { get; }
 
-    /// <summary>The matching faces, in the order received; empty when none matches.</summary>
+    /// <summary>The <c>matches</c>, in the order received.</summary>
     public IReadOnlyList<WantedMatch> Matches { get; }
 
     internal static WantedPersonReading Read(JsonObject raw)
@@ -555,10 +548,10 @@ public sealed class WantedPersonReading : Reading
     }
 }
 
-/// <summary>One match of a <see cref="WantedPersonReading"/>.</summary>
-/// <param name="Box">Where the matching face is.</param>
-/// <param name="Score">How closely it matches the list entry.</param>
-/// <param name="Reference">The list entry it matches, as received.</param>
+/// <summary>One entry of a <see cref="WantedPersonReading"/>'s matches.</summary>
+/// <param name="Box">Its box.</param>
+/// <param name="Score">Its <c>score</c>, as received.</param>
+/// <param name="Reference">Its <c>reference</c>, as received.</param>
 public sealed record WantedMatch(FaceBox Box, double Score, string Reference);
 
 /// <summary>
