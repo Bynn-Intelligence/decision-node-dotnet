@@ -62,8 +62,14 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>The default number of retries after the first attempt.</summary>
     public const int DefaultMaxRetries = 2;
 
-    /// <summary>The default time allowed for each attempt.</summary>
+    /// <summary>
+    /// The default time allowed for each attempt; 30 seconds for a decision whose boosters name
+    /// <c>ocr</c> (see <see cref="Timeout"/>).
+    /// </summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>The time allowed for each attempt of a decision naming <c>ocr</c> when no timeout was set.</summary>
+    internal static readonly TimeSpan OcrTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>The default time allowed for each attempt of an image's storage <c>PUT</c>, apart from <see cref="DefaultTimeout"/>.</summary>
     public static readonly TimeSpan DefaultUploadTimeout = TimeSpan.FromSeconds(60);
@@ -81,6 +87,9 @@ public sealed partial class DecisionNodeClient : IDisposable
     private readonly Action<string>? _debugLog;
     private readonly UploadCache _uploads = new();
 
+    /// <summary>True when the caller set <see cref="DecisionNodeClientOptions.Timeout"/>: it is then used as given, even for ocr.</summary>
+    private readonly bool _timeoutSet;
+
     /// <summary>Creates a client from settings, the environment and the defaults, in that order.</summary>
     public DecisionNodeClient(DecisionNodeClientOptions options)
     {
@@ -90,6 +99,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         BaseUrl = CheckBaseUrl((NonEmpty(options.BaseUrl) ?? NonEmpty(Environment.GetEnvironmentVariable("DECISIONNODE_BASE_URL")) ?? DefaultBaseUrl).TrimEnd('/'));
         Model = NonEmpty(options.Model) ?? NonEmpty(Environment.GetEnvironmentVariable("DECISIONNODE_MODEL")) ?? DefaultModel;
         Timeout = options.Timeout ?? DefaultTimeout;
+        _timeoutSet = options.Timeout is not null;
         if (Timeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(options), Timeout, "Timeout must be above zero.");
@@ -319,7 +329,12 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>The model sent when a call names none.</summary>
     public string Model { get; }
 
-    /// <summary>The time allowed for each attempt.</summary>
+    /// <summary>
+    /// The time allowed for each attempt. When no timeout was set, a decision whose boosters name
+    /// <c>ocr</c> is allowed 30 seconds; a timeout that was set is used as given, even below that.
+    /// A decision naming <c>ocr</c> is never retried after a timeout, since the server finishes
+    /// the attempt and may bill it.
+    /// </summary>
     public TimeSpan Timeout { get; }
 
     /// <summary>Retries after the first attempt.</summary>
@@ -800,7 +815,12 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     private async Task<Decision> SendDecisionAsync(string path, PreparedRequest request, CancellationToken ct)
     {
-        var (parsed, result) = await SendWithImagesAsync(path, request.Body, request.Images, ct).ConfigureAwait(false);
+        // The ocr booster reads for longer: 30 s an attempt unless the caller set a timeout, and
+        // no retry after a timeout, since the server finishes the attempt and may bill it.
+        var plan = NamesOcr(request.Body)
+            ? new AttemptPlan(_timeoutSet ? Timeout : OcrTimeout, RetryTimeouts: false)
+            : AttemptPlan.Default;
+        var (parsed, result) = await SendWithImagesAsync(path, request.Body, request.Images, plan, ct).ConfigureAwait(false);
         if (parsed is not JsonObject obj)
         {
             throw new ServerError(new ErrorDetails
@@ -813,7 +833,21 @@ public sealed partial class DecisionNodeClient : IDisposable
         return new Decision(obj, result.Header, result.Status);
     }
 
+    /// <summary>True when the body's boosters name <c>ocr</c>, by its bare name or in the object form.</summary>
+    private static bool NamesOcr(JsonObject body) =>
+        body["boosters"] is JsonArray boosters && boosters.Any(b =>
+            JsonValues.AsString(b) == Booster.Ocr || (b is JsonObject o && JsonValues.AsString(o["name"]) == Booster.Ocr));
+
     // ------------------------------------------------------------------ transport
+
+    /// <summary>
+    /// How one call's attempts run: the time allowed for each (<c>null</c>: the client's
+    /// <see cref="Timeout"/>) and whether a timed-out attempt is retried.
+    /// </summary>
+    internal sealed record AttemptPlan(TimeSpan? Timeout, bool RetryTimeouts)
+    {
+        public static readonly AttemptPlan Default = new(null, true);
+    }
 
     /// <summary>Which failures a call is retried on.</summary>
     internal enum RetryPolicy
@@ -832,9 +866,9 @@ public sealed partial class DecisionNodeClient : IDisposable
     }
 
     /// <summary>Sends a request with retries and parses the JSON body of its 2xx answer.</summary>
-    internal async Task<(JsonNode? Body, Attempt Result)> SendJsonAsync(HttpMethod method, string path, byte[]? body, string? contentType, RetryPolicy policy, CancellationToken ct)
+    internal async Task<(JsonNode? Body, Attempt Result)> SendJsonAsync(HttpMethod method, string path, byte[]? body, string? contentType, RetryPolicy policy, CancellationToken ct, AttemptPlan? plan = null)
     {
-        var result = await ExchangeAsync(method, path, body, contentType, policy, stream: false, ct).ConfigureAwait(false);
+        var result = await ExchangeAsync(method, path, body, contentType, policy, stream: false, ct, plan).ConfigureAwait(false);
         return (ParseJson(result), result);
     }
 
@@ -861,8 +895,10 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// its error. With <paramref name="stream"/> the 2xx body is left unread in
     /// <see cref="Attempt.Response"/>, which the caller disposes.
     /// </summary>
-    internal async Task<Attempt> ExchangeAsync(HttpMethod method, string path, byte[]? body, string? contentType, RetryPolicy policy, bool stream, CancellationToken ct)
+    internal async Task<Attempt> ExchangeAsync(HttpMethod method, string path, byte[]? body, string? contentType, RetryPolicy policy, bool stream, CancellationToken ct, AttemptPlan? plan = null)
     {
+        plan ??= AttemptPlan.Default;
+        var attemptTimeout = plan.Timeout ?? Timeout;
         if (string.IsNullOrEmpty(_apiKey))
         {
             throw new AuthenticationError(new ErrorDetails
@@ -877,9 +913,10 @@ public sealed partial class DecisionNodeClient : IDisposable
             Attempt result;
             try
             {
-                result = await SendOnceAsync(method, uri, path, body, contentType, stream, ct).ConfigureAwait(false);
+                result = await SendOnceAsync(method, uri, path, body, contentType, stream, attemptTimeout, ct).ConfigureAwait(false);
             }
-            catch (DecisionNodeError lost) when (lost is TimeoutError or ConnectionError && policy != RetryPolicy.Mutation && attempt < MaxRetries)
+            catch (DecisionNodeError lost) when (lost is TimeoutError or ConnectionError && policy != RetryPolicy.Mutation && attempt < MaxRetries
+                && (plan.RetryTimeouts || lost is not TimeoutError))
             {
                 await Delay(Backoff(attempt), ct).ConfigureAwait(false);
                 continue;
@@ -904,7 +941,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         }
     }
 
-    private async Task<Attempt> SendOnceAsync(HttpMethod method, Uri uri, string path, byte[]? body, string? contentType, bool stream, CancellationToken ct)
+    private async Task<Attempt> SendOnceAsync(HttpMethod method, Uri uri, string path, byte[]? body, string? contentType, bool stream, TimeSpan attemptTimeout, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(method, uri)
         {
@@ -937,7 +974,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         // One deadline for the whole attempt: sending, the headers and the last byte of the body.
         // A streamed 2xx body is read after it, under the caller's token only.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(Timeout);
+        timeout.CancelAfter(attemptTimeout);
         var clock = Stopwatch.StartNew();
         HttpResponseMessage? response = null;
         try
@@ -975,7 +1012,7 @@ public sealed partial class DecisionNodeClient : IDisposable
             Log(method, path, "timeout", null, clock);
             throw new TimeoutError(new ErrorDetails
             {
-                Message = $"the request timed out after {Timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s",
+                Message = $"the request timed out after {attemptTimeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s",
                 Inner = ex,
             });
         }

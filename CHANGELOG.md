@@ -22,6 +22,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 
 - An image id longer than 64 characters (counted as Unicode code points) throws `BadRequestError` (`api_usage_error`, `Image <n>: its id is longer than 64 characters.`) before anything is sent, checked image by image after the empty-id check and before the duplicate check.
 - `Usage.Cost`: what each answer cost, as the API sends it (`Usd`, `ModelUsd`, `BoostersUsd`, `FreeTier`, and the raw object), on decisions, batch result lines and session replies; `null` when absent, never zeros, and `Usd` is never computed from the parts.
+- A decision whose boosters name `ocr` has 30 seconds an attempt when no `Timeout` was set (a set `Timeout` is used as given) and is never retried after a timeout, since the server finishes the attempt and may bill it; its other retries stay. `DecideAsync`, the helpers and `DecideManyAsync`; not sessions, batches or `DecideRawAsync`.
 
 ### Changed
 

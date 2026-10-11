@@ -90,7 +90,7 @@ public sealed partial class DecisionNodeClient
     /// bytes inline under the threshold, else uploaded. A stale reference to an upload this
     /// client placed is uploaded again and the request sent once more (not a retry).
     /// </summary>
-    private async Task<(JsonNode? Body, Attempt Result)> SendWithImagesAsync(string path, JsonObject body, IReadOnlyList<Image> images, CancellationToken ct)
+    private async Task<(JsonNode? Body, Attempt Result)> SendWithImagesAsync(string path, JsonObject body, IReadOnlyList<Image> images, AttemptPlan plan, CancellationToken ct)
     {
         for (var round = 0; ; round++)
         {
@@ -101,7 +101,7 @@ public sealed partial class DecisionNodeClient
             }
             try
             {
-                return await SendJsonAsync(HttpMethod.Post, path, JsonValues.ToUtf8(body), JsonContentType, RetryPolicy.Default, ct).ConfigureAwait(false);
+                return await SendJsonAsync(HttpMethod.Post, path, JsonValues.ToUtf8(body), JsonContentType, RetryPolicy.Default, ct, plan).ConfigureAwait(false);
             }
             catch (BadRequestError error) when (round == 0 && placed.Count > 0 && error.ErrorType is { } type && StaleUpload.Contains(type))
             {

@@ -485,6 +485,8 @@ A bad argument throws .NET's own `ArgumentException` (or its subclasses `Argumen
 
 Each attempt has 10 seconds, from sending the request to the last byte of the response body. Failed attempts are retried twice by default on 408, 429, every 5xx (529 included), timeouts and connection errors. The wait is the server's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either, exponential backoff from 0.5 seconds with jitter, capped at 8 seconds. 400, 401, 402, 403, 404 and 422 are never retried. A decision changes nothing on the server, so a retry is always safe.
 
+One exception: reading the text of a picture takes longer, so a decision whose boosters name `ocr` (by its name or as `Booster.Of(Booster.Ocr, ...)`) has 30 seconds an attempt when you set no `timeout`; a `timeout` you set is used as given. Such a request is never retried after a timeout, because the server finishes the timed-out attempt and may bill it: the call throws `TimeoutError` instead. Its other retries (408, 429, 5xx, connection errors) stay. Give requests that use `ocr` a timeout of at least 30 seconds. This covers `DecideAsync`, the helpers and each request of `DecideManyAsync`, not sessions, batches or `DecideRawAsync`.
+
 Only a 2xx status is a success. Redirects are never followed: a 3xx is a `DecisionNodeError` with its status, so your key is never sent to another URL or over plain HTTP. The same holds for an `HttpClient` you pass in (see Configuration).
 
 Your `CancellationToken` cancels the whole call, retries included, and surfaces as `OperationCanceledException`, not `TimeoutError`.
@@ -496,7 +498,7 @@ Your `CancellationToken` cancels the whole call, retries included, and surfaces 
 | API key | `apiKey` | `DECISIONNODE_API_KEY` | none |
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
 | Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-moe` |
-| Timeout per attempt | `timeout` (above zero) | | 10 seconds |
+| Timeout per attempt | `timeout` (above zero) | | 10 seconds (30 for a decision naming `ocr`) |
 | Retries | `maxRetries` (0 or more) | | 2 |
 | Inline threshold | `inlineThreshold` (0 or more) | | 524,288 bytes |
 | Timeout per image upload attempt | `uploadTimeout` (above zero) | | 60 seconds |
