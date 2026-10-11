@@ -736,6 +736,13 @@ public static class Driver
             ["c2pa_signer"] = g.C2paSigner,
             ["c2pa"] = g.C2pa,
         },
+        OcrReading o => new JsonObject
+        {
+            ["kind"] = "ocr",
+            ["image"] = o.Image,
+            ["text"] = o.Text,
+            ["truncated"] = o.Truncated,
+        },
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
     };
 

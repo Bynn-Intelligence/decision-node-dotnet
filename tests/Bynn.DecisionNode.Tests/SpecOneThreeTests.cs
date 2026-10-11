@@ -358,18 +358,46 @@ public class SpecOneThreeTests
     }
 
     [Fact]
-    public async Task ReadingsOfTheNewerBoostersAreGenericReadings()
+    public async Task AFaceDetectionReadingIsAGenericReading()
     {
         const string body = """
             {"answers":{},"evidence":{
-              "face_detection":{"version":"face_detection-v1","status":"ok","latency_ms":40,"billed_calls":1,"results":[{"image":"a","faces":1}]},
-              "ocr":{"version":"ocr-v1","status":"ok","latency_ms":90,"billed_calls":1,"results":[{"image":"a","text":"Total 42.00"}]}}}
+              "face_detection":{"version":"face_detection-v1","status":"ok","latency_ms":40,"billed_calls":1,"results":[{"image":"a","faces":1}]}}}
             """;
         using var dn = Client(new StubHandler((_, _) => Ok(body)));
         var d = await dn.DecideAsync("s", OneTruth());
         var faces = Assert.IsType<UnknownReading>(d.Evidence!["face_detection"].Results[0]);
         Assert.Equal("face_detection", faces.Booster);
-        var text = Assert.IsType<UnknownReading>(d.Evidence["ocr"].Results[0]);
-        Assert.Equal("Total 42.00", (string)text.Raw!["text"]!);
+    }
+
+    [Fact]
+    public async Task OcrReadingsCarryTheirText()
+    {
+        const string body = """
+            {"answers":{},"evidence":{
+              "ocr":{"version":"ocr-v1","status":"ok","latency_ms":90,"billed_calls":3,"results":[
+                {"image":"a","text":"Total 42.00","truncated":false,"region":{"x":4}},
+                {"image":"b","text":"","truncated":false},
+                {"image":"c","text":"{\"total\": \"42.00\"}","truncated":true},
+                {"image":"d","truncated":false},
+                {"image":"e","text":7,"truncated":false},
+                {"image":5,"text":"x","truncated":false},
+                {"image":"f","text":"x","truncated":"yes"},
+                {"image":"g","text":"x"},
+                {"image":"h","text":"x","truncated":null}]}}}
+            """;
+        using var dn = Client(new StubHandler((_, _) => Ok(body)));
+        var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["ocr"].Results;
+        var plain = Assert.IsType<OcrReading>(results[0]);
+        Assert.Equal(("a", "Total 42.00", false), (plain.Image, plain.Text, plain.Truncated));
+        Assert.Equal("ocr", plain.Booster);
+        var blank = Assert.IsType<OcrReading>(results[1]);
+        Assert.Equal("", blank.Text);
+        var cut = Assert.IsType<OcrReading>(results[2]);
+        Assert.Equal("{\"total\": \"42.00\"}", cut.Text);
+        Assert.True(cut.Truncated);
+        // No text, a text that is not a string, an image id that is not a string, a truncated
+        // that is not a boolean, and no truncated at all: generic readings.
+        Assert.All(results.Skip(3), r => Assert.IsType<UnknownReading>(r));
     }
 }

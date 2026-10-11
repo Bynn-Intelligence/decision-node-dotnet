@@ -48,8 +48,9 @@ public sealed class Booster
     public const string WantedPerson = "wanted_person";
 
     /// <summary>
-    /// Reads any picture: the text it shows, or what the option <c>prompt</c> (at most 500
-    /// characters) asks it to read.
+    /// Reads any picture: the text it shows, or what the option <c>prompt</c> (at most 2,000
+    /// characters, judged by the API; nothing is checked locally) asks it to read. Its readings
+    /// are <see cref="OcrReading"/>s.
     /// </summary>
     public const string Ocr = "ocr";
 
@@ -243,7 +244,7 @@ public sealed class Evidence
 
 /// <summary>
 /// One booster's reading of one image: an <see cref="AgeReading"/>, an
-/// <see cref="AiGeneratedReading"/> or, for a booster this version of the library does not know
+/// <see cref="AiGeneratedReading"/>, an <see cref="OcrReading"/> or, for a booster this version of the library does not know
 /// or a reading with a missing or wrongly typed field, an <see cref="UnknownReading"/> holding
 /// its raw fields. A reading never fails the decision. Numbers are passed through as received.
 /// </summary>
@@ -277,6 +278,7 @@ public abstract class Reading
             {
                 DecisionNode.Booster.Age => AgeReading.Read(raw),
                 DecisionNode.Booster.AiGenerated => AiGeneratedReading.Read(raw),
+                DecisionNode.Booster.Ocr => OcrReading.Read(raw),
                 _ => new UnknownReading(booster, raw),
             };
         }
@@ -426,6 +428,37 @@ public sealed class AiGeneratedReading : Reading
         };
         return new AiGeneratedReading(
             raw, generated, confidence, method, top, OptionalText(raw, "c2pa_signer"), OptionalText(raw, "c2pa"));
+    }
+}
+
+/// <summary>
+/// The <c>ocr</c> booster's reading of one image: the text the picture shows, in reading order,
+/// or the answer to the booster's <c>prompt</c>. A picture without text reads the empty string.
+/// </summary>
+public sealed class OcrReading : Reading
+{
+    private OcrReading(JsonObject raw, string text, bool truncated)
+        : base(DecisionNode.Booster.Ocr, raw)
+    {
+        Text = text;
+        Truncated = truncated;
+    }
+
+    /// <summary>The text read, exactly as received; <c>""</c> when the picture shows none.</summary>
+    public new string Text { get; }
+
+    /// <summary><c>true</c> when the reading was cut short, <c>false</c> when it is whole.</summary>
+    public bool Truncated { get; }
+
+    internal static OcrReading Read(JsonObject raw)
+    {
+        _ = Reading.Text(raw, "image");
+        var text = Reading.Text(raw, "text");
+        // text and truncated are always sent: a reading without either is malformed.
+        var truncated = raw["truncated"] is JsonValue v && v.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
+            ? v.GetValue<bool>()
+            : throw new MalformedReading();
+        return new OcrReading(raw, text, truncated);
     }
 }
 
