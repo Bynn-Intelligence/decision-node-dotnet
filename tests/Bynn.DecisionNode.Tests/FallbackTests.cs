@@ -41,21 +41,21 @@ public class FallbackTests
             Assert.Equal("false", r.Json!["fallback"]!.ToJsonString());
         }
         Assert.Equal(
-            """{"custom_id":"a","model":"decisionnode-latest","state":"","questions":{"q":{"type":"truth","instructions":"?"}},"fallback":false}""",
+            """{"custom_id":"a","model":"decisionnode-moe","state":"","questions":{"q":{"type":"truth","instructions":"?"}},"fallback":false}""",
             sent[7].Body!.TrimEnd('\n'));
     }
 
     [Fact]
     public async Task AFallbackAnswerNamesBothModels()
     {
-        const string body = """{"model":"decisionnode-1.0-flash","answers":{"q":{"type":"truth","truth":0.5}},"usage":{"input_tokens":9,"output_tokens":0}}""";
+        const string body = """{"model":"decisionnode-flash-0.9.0-rc1","answers":{"q":{"type":"truth","truth":0.5}},"usage":{"input_tokens":9,"output_tokens":0}}""";
         using var dn = Client(new StubHandler((_, _) => Ok(body,
-            ("x-decisionnode-model", "decisionnode-1.0-flash"),
-            ("x-decisionnode-fallback", "decisionnode-1.0-flash"),
-            ("x-decisionnode-requested-model", "decisionnode-1.0"))));
-        var d = await dn.DecideAsync("s", OneTruth(), model: "decisionnode-1.0");
-        Assert.Equal("decisionnode-1.0-flash", d.Model);
-        Assert.Equal(new Fallback("decisionnode-1.0-flash", "decisionnode-1.0"), d.Fallback);
+            ("x-decisionnode-model", "decisionnode-flash-0.9.0-rc1"),
+            ("x-decisionnode-fallback", "decisionnode-flash-0.9.0-rc1"),
+            ("x-decisionnode-requested-model", "decisionnode-moe-0.9.0-rc1"))));
+        var d = await dn.DecideAsync("s", OneTruth(), model: "decisionnode-moe");
+        Assert.Equal("decisionnode-flash-0.9.0-rc1", d.Model);
+        Assert.Equal(new Fallback("decisionnode-flash-0.9.0-rc1", "decisionnode-moe-0.9.0-rc1"), d.Fallback);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class FallbackTests
         var stub = new StubHandler((_, _) => Json(529, """{"detail":{"error_type":"overloaded_error","message":"Overloaded."}}""", ("retry-after-ms", "5")));
         using var dn = Client(stub);
         dn.Delay = (_, _) => Task.CompletedTask;
-        await Assert.ThrowsAsync<OverloadedError>(() => dn.DecideAsync("s", OneTruth(), model: "decisionnode-1.0", fallback: false));
+        await Assert.ThrowsAsync<OverloadedError>(() => dn.DecideAsync("s", OneTruth(), model: "decisionnode-moe", fallback: false));
         Assert.Equal(3, stub.Requests.Count);
     }
 

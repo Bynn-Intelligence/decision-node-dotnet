@@ -24,6 +24,13 @@ public static class Compare
 
     public static bool Same(JsonNode? a, JsonNode? b)
     {
+        // {"$pattern": regex} (suite 1.11): any string the regular expression finds in passes,
+        // so a case checks a pinned model id by its family prefix, never its version.
+        if (a is JsonObject p && p.Count == 1 && p["$pattern"] is JsonValue re && re.GetValueKind() == JsonValueKind.String)
+        {
+            return b is JsonValue s && s.GetValueKind() == JsonValueKind.String
+                && System.Text.RegularExpressions.Regex.IsMatch(s.GetValue<string>(), re.GetValue<string>());
+        }
         if (a is null || b is null)
         {
             return a is null && b is null;

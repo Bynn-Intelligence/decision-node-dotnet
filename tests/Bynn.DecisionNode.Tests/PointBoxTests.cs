@@ -10,7 +10,7 @@ public class PointBoxTests
     private static readonly Image Dock = Image.FromUrl("dock", "https://files.example.com/dock/0001.jpg");
 
     private const string Answered = """
-        {"model":"decisionnode-1.0","answers":{
+        {"model":"decisionnode-moe-0.9.0-rc1","answers":{
         "pick":{"type":"point","x":812,"y":455,"present":0.97,"confidence":0.91,"image":"belt","width":1920,"height":1080},
         "damage":{"type":"box","x1":0.1563,"y1":0.1111,"x2":0.2708,"y2":0.3796,"present":0.05,"confidence":0.88,"image":"belt","width":1920,"height":1080}}}
         """;

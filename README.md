@@ -327,14 +327,14 @@ Every error of a request that named boosters carries `Boosters`: each booster's 
 
 ## Fine-tuned models
 
-A fine-tuned model is your workspace's own version of a model, trained in the console on decisions you labelled. Call it by its name in `model`, as given: `decisionnode-1.0-flash@acme/fraud` means the version deployed most recently, and `decisionnode-1.0-flash@acme/fraud:3` pins version 3. The decision's `Model` always names the pinned version that answered. `ModelsAsync()` lists your workspace's fine-tuned models beside the catalogue's, with `FineTuned`, `Base` (the model it was trained from), `AdapterVersion` and `Status` (`deployed` answers decisions; `ready` is trained but not deployed). A name that does not exist, is not deployed or belongs to another workspace is the API's `BadRequestError` "Unknown model: <name>".
+A fine-tuned model is your workspace's own version of a model, trained in the console on decisions you labelled. Call it by its name in `model`, as given: `decisionnode-flash@acme/fraud` means the version deployed most recently, and `decisionnode-flash@acme/fraud:3` pins version 3. The decision's `Model` always names the pinned version that answered. `ModelsAsync()` lists your workspace's fine-tuned models beside the catalogue's, with `FineTuned`, `Base` (the model it was trained from), `AdapterVersion` and `Status` (`deployed` answers decisions; `ready` is trained but not deployed). A name that does not exist, is not deployed or belongs to another workspace is the API's `BadRequestError` "Unknown model: <name>".
 
 ## Fallback
 
-When `decisionnode-1.0` has no worker ready to take a request at once, the API answers it with `decisionnode-1.0-flash` instead of making you wait. The decision says so: `Decision.Fallback` is `null` on an ordinary answer, and on a fallback answer holds `ServedModel` (the model that answered) and `RequestedModel` (the model you asked for). `Decision.Model` is always the model that answered.
+When `decisionnode-moe` has no worker ready to take a request at once, the API answers it with `decisionnode-flash` instead of making you wait. The decision says so: `Decision.Fallback` is `null` on an ordinary answer, and on a fallback answer holds `ServedModel` (the model that answered) and `RequestedModel` (the model you asked for). `Decision.Model` is always the model that answered.
 
 ```csharp
-var d = await dn.DecideAsync("I was charged twice.", questions, model: "decisionnode-1.0");
+var d = await dn.DecideAsync("I was charged twice.", questions, model: "decisionnode-moe");
 if (d.Fallback is { } f)
 {
     Console.WriteLine($"{f.ServedModel} answered for {f.RequestedModel}");
@@ -462,7 +462,7 @@ The library checks every fixed rule the API documents before sending, so a reque
 - `ValidationError` with the server's exact `Entries` for a question without a type or with fields of the wrong type, a state that is not a string, an object or an array, a number grid the API cannot build (`min` above `max`, a `step` not above 0, more than 6 decimals, beyond 2^53, more than 4,096 values), and a session `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600.
 - `BadRequestError` with `ErrorType` `api_usage_error` for an unknown question type, a request nested more than 128 levels deep, an image fault (see Images), a frame fault (see Sessions), a batch request without a unique `custom_id` or an empty add, and `ListAsync` paging out of range; `image_url_refused` for an image URL with user information, a port other than 443, or a literal private address.
 
-Limits only `/v1/models` states, such as whether a model answers number questions or serves sessions, its session window, `requests_per_batch` and `max_custom_id_chars`, are checked once you have called `ModelsAsync()` on the client, and left to the server otherwise. A model is found in that list by its name, its alias (`decisionnode-latest`) or its pinned version. Token limits stay the server's, because they differ by model.
+Limits only `/v1/models` states, such as whether a model answers number questions or serves sessions, its session window, `requests_per_batch` and `max_custom_id_chars`, are checked once you have called `ModelsAsync()` on the client, and left to the server otherwise. A model is found in that list by its name, its alias (the family id, `decisionnode-moe`) or its pinned version. Token limits stay the server's, because they differ by model.
 
 To run the same checks without sending, for example to validate input as it is entered, call `CheckRequest(request)` (a `DecideRequest` or `SessionOptions`), `Batches.CheckCreate(requests)`, `Batches.CheckAdd(requests)` or `session.CheckFrame(...)`. Each throws exactly what the call would throw and returns when the call would be sent; nothing is sent and nothing uploaded.
 
@@ -493,7 +493,7 @@ Your `CancellationToken` cancels the whole call, retries included, and surfaces 
 |---|---|---|---|
 | API key | `apiKey` | `DECISIONNODE_API_KEY` | none |
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
-| Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-latest` |
+| Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-moe` |
 | Timeout per attempt | `timeout` (above zero) | | 10 seconds |
 | Retries | `maxRetries` (0 or more) | | 2 |
 | Inline threshold | `inlineThreshold` (0 or more) | | 524,288 bytes |
@@ -501,7 +501,7 @@ Your `CancellationToken` cancels the whole call, retries included, and surfaces 
 | Extra headers | `headers` | | none |
 | HTTP client | `httpClient` | | one the client creates and owns |
 
-An argument beats the environment, which beats the default. The base URL must be `https`; plain `http` is accepted only for `localhost`, `127.0.0.1` and `::1` (a local or self-hosted server), and anything else throws `ArgumentException` when the client is made, so a key never travels unencrypted. An empty string counts as not given, for the client's arguments and for a call's `model`. Pin a version with `model: "decisionnode-1.0"`, or use `decisionnode-flash-latest` for the faster, lower-cost model. `DecisionNodeClientOptions` holds the same settings, plus `DebugLog`, which receives one line per attempt (method, path, status, request id and timing; never the state, the questions or the key).
+An argument beats the environment, which beats the default. The base URL must be `https`; plain `http` is accepted only for `localhost`, `127.0.0.1` and `::1` (a local or self-hosted server), and anything else throws `ArgumentException` when the client is made, so a key never travels unencrypted. An empty string counts as not given, for the client's arguments and for a call's `model`. The model ids are the families `decisionnode-moe` (the default) and `decisionnode-flash` (faster and lower cost), each always the current release. A pinned id names one release, `decisionnode-<family>-<version>`: `ModelsAsync()` lists the pinned ids your key may use, and every decision's `Model` is the pinned id that answered. `DecisionNodeClientOptions` holds the same settings, plus `DebugLog`, which receives one line per attempt (method, path, status, request id and timing; never the state, the questions or the key).
 
 `headers` are added to every API request and to a session's WebSocket handshake, never to a storage upload; `x-decisionnode-safety-body: true` is the one the API reads (see Safety).
 

@@ -99,27 +99,27 @@ public class EnvironmentTests : IDisposable
     {
         Environment.SetEnvironmentVariable("DECISIONNODE_API_KEY", "dn_from_env");
         Environment.SetEnvironmentVariable("DECISIONNODE_BASE_URL", "https://self-hosted.example.test/");
-        Environment.SetEnvironmentVariable("DECISIONNODE_MODEL", "decisionnode-1.0-flash");
+        Environment.SetEnvironmentVariable("DECISIONNODE_MODEL", "decisionnode-flash");
         var stub = new StubHandler((_, _) => Ok());
         using var dn = new DecisionNodeClient(new DecisionNodeClientOptions { HttpClient = new HttpClient(stub), DelegatingHandlersNeverResendRequests = true });
         await dn.DecideAsync("s", OneTruth());
         var r = Assert.Single(stub.Requests);
         Assert.Equal("https://self-hosted.example.test/v1/decide", r.Uri.ToString());
         Assert.Equal("Bearer dn_from_env", r.Headers["Authorization"]);
-        Assert.Equal("decisionnode-1.0-flash", (string?)r.Json!["model"]);
+        Assert.Equal("decisionnode-flash", (string?)r.Json!["model"]);
     }
 
     [Fact]
     public async Task ArgumentsBeatTheEnvironment()
     {
         Environment.SetEnvironmentVariable("DECISIONNODE_API_KEY", "dn_from_env");
-        Environment.SetEnvironmentVariable("DECISIONNODE_MODEL", "decisionnode-1.0-flash");
+        Environment.SetEnvironmentVariable("DECISIONNODE_MODEL", "decisionnode-flash");
         var stub = new StubHandler((_, _) => Ok());
-        using var dn = new DecisionNodeClient(new DecisionNodeClientOptions { ApiKey = "dn_explicit", Model = "decisionnode-1.0", BaseUrl = "https://a.example.test", HttpClient = new HttpClient(stub), DelegatingHandlersNeverResendRequests = true });
+        using var dn = new DecisionNodeClient(new DecisionNodeClientOptions { ApiKey = "dn_explicit", Model = "decisionnode-moe", BaseUrl = "https://a.example.test", HttpClient = new HttpClient(stub), DelegatingHandlersNeverResendRequests = true });
         await dn.DecideAsync("s", OneTruth());
         var r = Assert.Single(stub.Requests);
         Assert.Equal("Bearer dn_explicit", r.Headers["Authorization"]);
-        Assert.Equal("decisionnode-1.0", (string?)r.Json!["model"]);
+        Assert.Equal("decisionnode-moe", (string?)r.Json!["model"]);
     }
 
     [Fact]
@@ -127,14 +127,14 @@ public class EnvironmentTests : IDisposable
     {
         Environment.SetEnvironmentVariable("DECISIONNODE_API_KEY", "dn_from_env");
         Environment.SetEnvironmentVariable("DECISIONNODE_BASE_URL", "https://self-hosted.example.test");
-        Environment.SetEnvironmentVariable("DECISIONNODE_MODEL", "decisionnode-1.0-flash");
+        Environment.SetEnvironmentVariable("DECISIONNODE_MODEL", "decisionnode-flash");
         var stub = new StubHandler((_, _) => Ok());
         using var dn = new DecisionNodeClient(new DecisionNodeClientOptions { ApiKey = "", BaseUrl = "", Model = "", HttpClient = new HttpClient(stub), DelegatingHandlersNeverResendRequests = true });
         await dn.DecideAsync("s", OneTruth());
         var r = Assert.Single(stub.Requests);
         Assert.Equal("https://self-hosted.example.test/v1/decide", r.Uri.ToString());
         Assert.Equal("Bearer dn_from_env", r.Headers["Authorization"]);
-        Assert.Equal("decisionnode-1.0-flash", (string?)r.Json!["model"]);
+        Assert.Equal("decisionnode-flash", (string?)r.Json!["model"]);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class EnvironmentTests : IDisposable
         }
         using var dn = new DecisionNodeClient();
         Assert.Equal("https://api.decisionnode.com", dn.BaseUrl);
-        Assert.Equal("decisionnode-latest", dn.Model);
+        Assert.Equal("decisionnode-moe", dn.Model);
         Assert.Equal(TimeSpan.FromSeconds(10), dn.Timeout);
         Assert.Equal(2, dn.MaxRetries);
     }

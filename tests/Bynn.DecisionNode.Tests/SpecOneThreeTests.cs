@@ -7,7 +7,7 @@ namespace Bynn.DecisionNode.Tests;
 public class SpecOneThreeTests
 {
     private const string BoostedBody = """
-        {"model":"decisionnode-1.0","answers":{"adult":{"type":"truth","truth":0.97}},
+        {"model":"decisionnode-moe-0.9.0-rc1","answers":{"adult":{"type":"truth","truth":0.97}},
          "evidence":{
            "age":{"version":"age-v3","status":"ok","latency_ms":212,"billed_calls":1,"results":[
              {"image":"a1b2","age_years":27,"low":22,"high":33,"confidence":0.81,"faces":1},
@@ -61,7 +61,7 @@ public class SpecOneThreeTests
         await dn.DecideAsync("s", OneTruth(), boosters: Array.Empty<Booster>());
         await dn.DecideAsync(new DecideRequest { State = "s", Questions = OneTruth(), Boosters = new List<Booster>() });
         Assert.All(stub.Requests, r => Assert.Equal(
-            """{"model":"decisionnode-latest","state":"s","questions":{"q":{"type":"truth","instructions":"?"}}}""",
+            """{"model":"decisionnode-moe","state":"s","questions":{"q":{"type":"truth","instructions":"?"}}}""",
             r.Body));
     }
 
@@ -87,7 +87,7 @@ public class SpecOneThreeTests
             Assert.Equal("""["age"]""", r.Json!["boosters"]!.ToJsonString());
         }
         Assert.Equal(
-            """{"custom_id":"a","model":"decisionnode-latest","state":"","questions":{"q":{"type":"truth","instructions":"?"}},"boosters":["age"]}""",
+            """{"custom_id":"a","model":"decisionnode-moe","state":"","questions":{"q":{"type":"truth","instructions":"?"}},"boosters":["age"]}""",
             sent[6].Body!.TrimEnd('\n'));
     }
 
@@ -288,20 +288,20 @@ public class SpecOneThreeTests
     [Fact]
     public async Task AnErrorWithoutTheHeaderHasNoBoosters()
     {
-        using var dn = Client(new StubHandler((_, _) => Json(400, """{"detail":{"error_type":"api_usage_error","message":"Unknown model: decisionnode-1.0-flash@acme/fraud"}}""")));
-        var error = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync("s", OneTruth(), model: "decisionnode-1.0-flash@acme/fraud"));
+        using var dn = Client(new StubHandler((_, _) => Json(400, """{"detail":{"error_type":"api_usage_error","message":"Unknown model: decisionnode-flash@acme/fraud"}}""")));
+        var error = await Assert.ThrowsAsync<BadRequestError>(() => dn.DecideAsync("s", OneTruth(), model: "decisionnode-flash@acme/fraud"));
         Assert.Empty(error.Boosters);
-        Assert.Equal("Unknown model: decisionnode-1.0-flash@acme/fraud", error.Message);
+        Assert.Equal("Unknown model: decisionnode-flash@acme/fraud", error.Message);
     }
 
     [Fact]
     public async Task AFineTunedModelNameIsSentAsGivenAndTheAnswerNamesThePinnedVersion()
     {
-        var stub = new StubHandler((_, _) => Ok("""{"model":"decisionnode-1.0-flash@acme/fraud:3","answers":{"q":{"type":"truth","truth":0.5}}}"""));
+        var stub = new StubHandler((_, _) => Ok("""{"model":"decisionnode-flash@acme/fraud:3","answers":{"q":{"type":"truth","truth":0.5}}}"""));
         using var dn = Client(stub);
-        var d = await dn.DecideAsync("s", OneTruth(), model: "decisionnode-1.0-flash@acme/fraud");
-        Assert.Equal("decisionnode-1.0-flash@acme/fraud", (string?)Assert.Single(stub.Requests).Json!["model"]);
-        Assert.Equal("decisionnode-1.0-flash@acme/fraud:3", d.Model);
+        var d = await dn.DecideAsync("s", OneTruth(), model: "decisionnode-flash@acme/fraud");
+        Assert.Equal("decisionnode-flash@acme/fraud", (string?)Assert.Single(stub.Requests).Json!["model"]);
+        Assert.Equal("decisionnode-flash@acme/fraud:3", d.Model);
     }
 
     [Fact]
@@ -309,9 +309,9 @@ public class SpecOneThreeTests
     {
         const string body = """
             {"models":[
-              {"name":"decisionnode-1.0-flash","description":"Fast","release_date":"2026-10-01","version":"decisionnode-1.0-flash","max_images":16},
-              {"name":"decisionnode-1.0-flash@acme/fraud:3","description":"Claims fraud","release_date":"2026-10-09","version":"decisionnode-1.0-flash@acme/fraud:3","fine_tuned":true,"base":"decisionnode-1.0-flash","adapter_version":3,"status":"deployed"},
-              {"name":"decisionnode-1.0-flash@acme/fraud:4","description":"Claims fraud","release_date":"2026-10-10","fine_tuned":true,"base":"decisionnode-1.0-flash","adapter_version":4,"status":"ready"}]}
+              {"name":"decisionnode-flash-0.9.0-rc1","description":"Fast","release_date":"2026-10-01","version":"decisionnode-flash-0.9.0-rc1","alias":"decisionnode-flash","max_images":16},
+              {"name":"decisionnode-flash@acme/fraud:3","description":"Claims fraud","release_date":"2026-10-09","version":"decisionnode-flash@acme/fraud:3","fine_tuned":true,"base":"decisionnode-flash","adapter_version":3,"status":"deployed"},
+              {"name":"decisionnode-flash@acme/fraud:4","description":"Claims fraud","release_date":"2026-10-10","fine_tuned":true,"base":"decisionnode-flash","adapter_version":4,"status":"ready"}]}
             """;
         using var dn = Client(new StubHandler((_, _) => Ok(body)));
         var models = await dn.ModelsAsync();
@@ -322,10 +322,10 @@ public class SpecOneThreeTests
         Assert.Null(catalogue.Status);
         var deployed = models[1];
         Assert.True(deployed.FineTuned);
-        Assert.Equal("decisionnode-1.0-flash", deployed.Base);
+        Assert.Equal("decisionnode-flash", deployed.Base);
         Assert.Equal(3, deployed.AdapterVersion);
         Assert.Equal("deployed", deployed.Status);
-        Assert.Equal("decisionnode-1.0-flash@acme/fraud:3", (string?)deployed.Limits["version"]);
+        Assert.Equal("decisionnode-flash@acme/fraud:3", (string?)deployed.Limits["version"]);
         Assert.Equal("ready", models[2].Status);
         Assert.Equal(4, models[2].AdapterVersion);
     }

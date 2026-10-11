@@ -62,7 +62,10 @@ public sealed class Decision
     /// <exception cref="KeyNotFoundException">No answer has this id.</exception>
     public Answer this[string id] => Answers[id];
 
-    /// <summary>The model version that answered, for example <c>decisionnode-1.0</c>.</summary>
+    /// <summary>
+    /// The pinned id of the model version that answered, <c>decisionnode-&lt;family&gt;-&lt;version&gt;</c>
+    /// (for a fine-tuned model its pinned name, for example <c>decisionnode-flash@acme/fraud:3</c>).
+    /// </summary>
     public string? Model { get; }
 
     /// <summary>The tokens the request used, and for a request with videos the frames and seconds read.</summary>
@@ -148,7 +151,10 @@ public sealed class ModelInfo
         Limits = new ReadOnlyDictionary<string, JsonNode?>(limits);
     }
 
-    /// <summary>The model id to send, for example <c>decisionnode-1.0</c>.</summary>
+    /// <summary>
+    /// The model id to send: a family id (<c>decisionnode-moe</c>, <c>decisionnode-flash</c>), a
+    /// pinned id <c>decisionnode-&lt;family&gt;-&lt;version&gt;</c>, or a fine-tuned model's name.
+    /// </summary>
     public string? Name { get; }
 
     public string? Description { get; }

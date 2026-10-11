@@ -25,12 +25,12 @@ public class BatchTests
     {
         var stub = new StubHandler((_, _) => Json(201, Draft));
         using var dn = Client(stub);
-        var batch = await dn.Batches.CreateAsync(new[] { Line("a", "charged twice"), new BatchRequest { CustomId = "b", Questions = OneTruth(), Model = "decisionnode-flash-latest" } });
+        var batch = await dn.Batches.CreateAsync(new[] { Line("a", "charged twice"), new BatchRequest { CustomId = "b", Questions = OneTruth(), Model = "decisionnode-flash" } });
         var sent = Assert.Single(stub.Requests);
         Assert.Equal("application/x-ndjson", sent.Headers["Content-Type"]);
         var lines = sent.Body!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal("""{"custom_id":"a","model":"decisionnode-latest","state":"charged twice","questions":{"q":{"type":"truth","instructions":"Refund?"}}}""", lines[0]);
-        Assert.Equal("""{"custom_id":"b","model":"decisionnode-flash-latest","state":"","questions":{"q":{"type":"truth","instructions":"?"}}}""", lines[1]);
+        Assert.Equal("""{"custom_id":"a","model":"decisionnode-moe","state":"charged twice","questions":{"q":{"type":"truth","instructions":"Refund?"}}}""", lines[0]);
+        Assert.Equal("""{"custom_id":"b","model":"decisionnode-flash","state":"","questions":{"q":{"type":"truth","instructions":"?"}}}""", lines[1]);
         Assert.Equal("batch_01J9ZB8Q3T", batch.Id);
         Assert.Equal(0.5, batch.PriceFactor);
     }

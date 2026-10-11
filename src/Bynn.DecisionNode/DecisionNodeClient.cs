@@ -53,8 +53,11 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>The API's default root URL.</summary>
     public const string DefaultBaseUrl = "https://api.decisionnode.com";
 
-    /// <summary>The default model.</summary>
-    public const string DefaultModel = "decisionnode-latest";
+    /// <summary>
+    /// The default model, <c>decisionnode-moe</c>: the family id, which always means the current
+    /// release. <c>decisionnode-flash</c> is the faster, lower-cost family.
+    /// </summary>
+    public const string DefaultModel = "decisionnode-moe";
 
     /// <summary>The default number of retries after the first attempt.</summary>
     public const int DefaultMaxRetries = 2;

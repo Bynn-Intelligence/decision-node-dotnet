@@ -80,7 +80,7 @@ public class SpecOneTwoTests
     public async Task AHeldLowerImageLimitIsTheMaxLength()
     {
         var stub = new StubHandler((r, _) => r.Uri.AbsolutePath == "/v1/models"
-            ? Ok("""{"models":[{"name":"decisionnode-latest","description":"d","release_date":"2026-10-08","images":{"max_images":2}}]}""")
+            ? Ok("""{"models":[{"name":"decisionnode-moe","description":"d","release_date":"2026-10-08","images":{"max_images":2}}]}""")
             : Ok());
         using var dn = Client(stub);
         await dn.ModelsAsync();

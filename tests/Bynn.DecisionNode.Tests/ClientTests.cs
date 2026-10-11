@@ -20,7 +20,7 @@ public class ClientTests
         Assert.Equal(HttpMethod.Post, r.Method);
         Assert.Equal("https://api.example.test/v1/decide", r.Uri.ToString());
         Assert.Equal(
-            """{"model":"decisionnode-latest","state":{"ticket":"charged twice"},"questions":{"route":{"type":"choice","instructions":"Where?","criteria":{"billing":"money","bug":"broken"}},"escalate":{"type":"truth","instructions":"Escalate?"}}}""",
+            """{"model":"decisionnode-moe","state":{"ticket":"charged twice"},"questions":{"route":{"type":"choice","instructions":"Where?","criteria":{"billing":"money","bug":"broken"}},"escalate":{"type":"truth","instructions":"Escalate?"}}}""",
             r.Body);
     }
 
@@ -51,11 +51,11 @@ public class ClientTests
     public async Task ModelPerCallBeatsClientModel()
     {
         var stub = new StubHandler((_, _) => Ok());
-        using var dn = Client(stub, model: "decisionnode-1.0");
+        using var dn = Client(stub, model: "decisionnode-moe");
         await dn.DecideAsync("s", OneTruth());
-        await dn.DecideAsync("s", OneTruth(), model: "decisionnode-1.0-flash");
+        await dn.DecideAsync("s", OneTruth(), model: "decisionnode-flash");
         var models = stub.Requests.Select(r => (string?)r.Json!["model"]).ToArray();
-        Assert.Equal(new[] { "decisionnode-1.0", "decisionnode-1.0-flash" }, models);
+        Assert.Equal(new[] { "decisionnode-moe", "decisionnode-flash" }, models);
     }
 
     [Fact]
@@ -160,9 +160,9 @@ public class ClientTests
     public async Task EmptyModelOnACallUsesTheClientsModel()
     {
         var stub = new StubHandler((_, _) => Ok());
-        using var dn = Client(stub, model: "decisionnode-1.0");
+        using var dn = Client(stub, model: "decisionnode-moe");
         await dn.DecideAsync("s", OneTruth(), model: "");
-        Assert.Equal("decisionnode-1.0", (string?)Assert.Single(stub.Requests).Json!["model"]);
+        Assert.Equal("decisionnode-moe", (string?)Assert.Single(stub.Requests).Json!["model"]);
     }
 
     [Fact]
@@ -186,13 +186,13 @@ public class ClientTests
     [Fact]
     public async Task ModelsReadsNameDescriptionDateAndLimits()
     {
-        var stub = new StubHandler((_, _) => Ok("""{"models":[{"name":"decisionnode-1.0","description":"Main.","release_date":"2026-10-01","max_input_tokens":32768},{"name":"decisionnode-latest"}]}"""));
+        var stub = new StubHandler((_, _) => Ok("""{"models":[{"name":"decisionnode-moe-0.9.0-rc1","description":"Main.","release_date":"2026-10-01","max_input_tokens":32768},{"name":"decisionnode-moe"}]}"""));
         using var dn = Client(stub);
         var models = await dn.ModelsAsync();
         var r = Assert.Single(stub.Requests);
         Assert.Equal(HttpMethod.Get, r.Method);
         Assert.Null(r.Body);
-        Assert.Equal("decisionnode-1.0", models[0].Name);
+        Assert.Equal("decisionnode-moe-0.9.0-rc1", models[0].Name);
         Assert.Equal("2026-10-01", models[0].ReleaseDate);
         Assert.Equal(32768, (int)models[0].Limits["max_input_tokens"]!);
         Assert.Empty(models[1].Limits);

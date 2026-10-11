@@ -17,7 +17,7 @@ public sealed class DecisionNodeClientOptions
     /// </summary>
     public string? BaseUrl { get; set; }
 
-    /// <summary>The model for every call that names none. Falls back to <c>DECISIONNODE_MODEL</c>, then <c>decisionnode-latest</c>.</summary>
+    /// <summary>The model for every call that names none. Falls back to <c>DECISIONNODE_MODEL</c>, then <c>decisionnode-moe</c>.</summary>
     public string? Model { get; set; }
 
     /// <summary>The time allowed for each attempt, from sending to the last byte of the body. Above zero; default 10 seconds.</summary>

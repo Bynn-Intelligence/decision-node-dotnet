@@ -15,10 +15,10 @@ public class ResponseTests
     public async Task ReadsEveryFieldOfADecision()
     {
         var d = await Decide(
-            """{"model":"decisionnode-1.0","answers":{"route":{"type":"choice","choice":"billing","confidence":0.73,"probabilities":{"account":0.12,"billing":0.8200000000000001,"bug":0.060000000000000005}},"urgency":{"type":"score","score":2.31,"confidence":0.31,"legend":{"0":"routine","1":"today","2":"urgent","3":"critical"},"probabilities":{"0":0.01,"1":0.09,"2":0.48,"3":0.42}},"escalate":{"type":"truth","truth":0.94}},"usage":{"input_tokens":62,"output_tokens":0}}""",
+            """{"model":"decisionnode-moe-0.9.0-rc1","answers":{"route":{"type":"choice","choice":"billing","confidence":0.73,"probabilities":{"account":0.12,"billing":0.8200000000000001,"bug":0.060000000000000005}},"urgency":{"type":"score","score":2.31,"confidence":0.31,"legend":{"0":"routine","1":"today","2":"urgent","3":"critical"},"probabilities":{"0":0.01,"1":0.09,"2":0.48,"3":0.42}},"escalate":{"type":"truth","truth":0.94}},"usage":{"input_tokens":62,"output_tokens":0}}""",
             ("x-request-id", "req_7"), ("x-decisionnode-latency-ms", "23"), ("x-decisionnode-safety", "harm=0.031, self_harm=0.004"));
 
-        Assert.Equal("decisionnode-1.0", d.Model);
+        Assert.Equal("decisionnode-moe-0.9.0-rc1", d.Model);
         Assert.Equal(new Usage(62, 0), d.Usage);
         Assert.Equal("req_7", d.RequestId);
         Assert.Equal(23, d.LatencyMs);

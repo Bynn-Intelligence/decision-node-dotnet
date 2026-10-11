@@ -215,11 +215,11 @@ public class SpecOneOneTests
     [Fact]
     public async Task OpenSessionSendsOnlyTheFieldsGivenAndAlwaysAModel()
     {
-        var open = """{"session_id":"ses_000000000000000000000001","model":"decisionnode-1.0","stream_url":"wss://api.example.test/v1/sessions/ses_000000000000000000000001/stream","questions":["q"],"answers":{"q":{"type":"truth","truth":0.1}}}""";
+        var open = """{"session_id":"ses_000000000000000000000001","model":"decisionnode-moe-0.9.0-rc1","stream_url":"wss://api.example.test/v1/sessions/ses_000000000000000000000001/stream","questions":["q"],"answers":{"q":{"type":"truth","truth":0.1}}}""";
         var stub = new StubHandler((_, _) => Ok(open));
         using var dn = Client(stub);
         var session = await dn.OpenSessionAsync(null, OneTruth(), window: 4);
-        Assert.Equal("""{"model":"decisionnode-latest","questions":{"q":{"type":"truth","instructions":"?"}},"window":4}""", Assert.Single(stub.Requests).Body);
+        Assert.Equal("""{"model":"decisionnode-moe","questions":{"q":{"type":"truth","instructions":"?"}},"window":4}""", Assert.Single(stub.Requests).Body);
         Assert.Equal("ses_000000000000000000000001", session.SessionId);
         Assert.Equal(0.1, session.Answers["q"].AsTruth().Truth);
         await Assert.ThrowsAsync<InvalidOperationException>(() => session.SendAsync("frame"));
@@ -260,13 +260,13 @@ public class SpecOneOneTests
     [Fact]
     public async Task HeldLimitsAreFoundByNameAliasOrVersion()
     {
-        const string models = """{"models":[{"name":"decisionnode-1.0","version":"decisionnode-1.0","alias":"decisionnode-latest","sessions":{"max_window":16}},{"name":"decisionnode-1.0-flash","version":"decisionnode-1.0-flash","alias":"decisionnode-flash-latest","number_max_grid_values":0}]}""";
+        const string models = """{"models":[{"name":"decisionnode-moe-0.9.0-rc1","version":"decisionnode-moe-0.9.0-rc1","alias":"decisionnode-moe","sessions":{"max_window":16}},{"name":"decisionnode-flash-0.9.0-rc1","version":"decisionnode-flash-0.9.0-rc1","alias":"decisionnode-flash","number_max_grid_values":0}]}""";
         var stub = new StubHandler((_, _) => Ok(models));
         using var dn = Client(stub);
         await dn.ModelsAsync();
-        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-latest" }));
-        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-1.0" }));
-        Assert.Throws<BadRequestError>(() => dn.CheckRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?") }, Model = "decisionnode-flash-latest" }));
+        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-moe" }));
+        Assert.Throws<ValidationError>(() => dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-moe-0.9.0-rc1" }));
+        Assert.Throws<BadRequestError>(() => dn.CheckRequest(new DecideRequest { Questions = new Dictionary<string, Question> { ["n"] = Question.Number("?") }, Model = "decisionnode-flash" }));
         // A model the list does not state holds nothing: left to the server.
         dn.CheckRequest(new SessionOptions { Questions = OneTruth(), Window = 17, Model = "decisionnode-9" });
     }

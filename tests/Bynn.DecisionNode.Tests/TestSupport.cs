@@ -78,7 +78,7 @@ public sealed class StubHandler : DelegatingHandler
 
 public static class Http
 {
-    public const string TruthBody = """{"model":"decisionnode-1.0","answers":{"q":{"type":"truth","truth":0.5}},"usage":{"input_tokens":9,"output_tokens":0}}""";
+    public const string TruthBody = """{"model":"decisionnode-moe-0.9.0-rc1","answers":{"q":{"type":"truth","truth":0.5}},"usage":{"input_tokens":9,"output_tokens":0}}""";
 
     public static HttpResponseMessage Json(int status, string body, params (string Name, string Value)[] headers)
     {

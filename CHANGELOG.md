@@ -21,9 +21,10 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 
 ### Changed
 
+- The default model is `decisionnode-moe` (it was `decisionnode-latest`). The model ids are the families `decisionnode-moe` and `decisionnode-flash`, which always mean the current release; a pinned id, `decisionnode-<family>-<version>`, is read from `ModelsAsync()`, and a decision's `Model` is the pinned id that answered. `model` stays free text.
 - An error whose body is not JSON (an HTML page from a proxy, plain text, an empty body) is classified by its status alone, with `ErrorType` `null`, `RequestId` and `Reason` from their headers, and the message `HTTP <status> <text>` plus the request id when there is one; the body is never read into the error.
 - `boosters` and `fallback` sit after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
-- A fine-tuned model's name (`decisionnode-1.0-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
+- A fine-tuned model's name (`decisionnode-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
 - Every `413`, a presign's and a batch add's included, is a `RequestTooLargeError` (the base `DecisionNodeError` before).
 - CI runs conformance suite 1.11.
 
