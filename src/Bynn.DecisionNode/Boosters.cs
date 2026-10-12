@@ -310,19 +310,8 @@ public abstract class Reading
         raw[field] is null ? null : Number(raw, field);
 
     /// <summary>A JSON integer of at least 0, written without a fraction or an exponent.</summary>
-    private protected static long Count(JsonObject raw, string field)
-    {
-        if (raw[field] is JsonValue v && v.GetValueKind() == System.Text.Json.JsonValueKind.Number)
-        {
-            if (v.TryGetValue(out System.Text.Json.JsonElement e) ? e.TryGetInt64(out var n) && IsInteger(e.GetRawText()) && n >= 0 : v.TryGetValue(out n) && n >= 0)
-            {
-                return n;
-            }
-        }
-        throw new MalformedReading();
-    }
-
-    private static bool IsInteger(string text) => text.All(c => c is '-' || char.IsAsciiDigit(c));
+    private protected static long Count(JsonObject raw, string field) =>
+        JsonValues.AsInteger(raw[field]) is { } n && n >= 0 && n <= long.MaxValue ? (long)n : throw new MalformedReading();
 
     /// <summary>A list of objects, each read by <paramref name="read"/>.</summary>
     private protected static IReadOnlyList<T> List<T>(JsonObject raw, string field, Func<JsonObject, T> read) =>

@@ -398,8 +398,11 @@ public static class Driver
                     var type = key[1..];
                     var image = a!["image"];
                     var units = a["units"];
+                    var most = a["max"];
+                    var typedMax = most is JsonValue mv && mv.GetValueKind() == System.Text.Json.JsonValueKind.Number && mv.TryGetValue(out System.Text.Json.JsonElement me) && me.TryGetInt32(out var m) && !me.GetRawText().Contains('.') ? m : (int?)null;
                     if ((image is not null && image.GetValueKind() != System.Text.Json.JsonValueKind.String) ||
-                        (units is not null && units.GetValueKind() != System.Text.Json.JsonValueKind.String))
+                        (units is not null && units.GetValueKind() != System.Text.Json.JsonValueKind.String) ||
+                        (most is not null && typedMax is null))
                     {
                         // Not writable with the typed builder: passed in its wire form, checked by the same rules.
                         var wire = new JsonObject { ["type"] = type };
@@ -410,8 +413,8 @@ public static class Driver
                         return Question.FromJson(wire);
                     }
                     return type == "point"
-                        ? Question.Point(a["instructions"]?.DeepClone(), (string?)image, (string?)units)
-                        : Question.Box(a["instructions"]?.DeepClone(), (string?)image, (string?)units);
+                        ? Question.Point(a["instructions"]?.DeepClone(), (string?)image, (string?)units, typedMax)
+                        : Question.Box(a["instructions"]?.DeepClone(), (string?)image, (string?)units, typedMax);
             }
         }
         return Question.FromJson((JsonObject)Plain(q, ctx)!);
@@ -635,6 +638,30 @@ public static class Driver
                     ["image"] = p.Image,
                     ["width"] = p.Width,
                     ["height"] = p.Height,
+                };
+            case PointsAnswer ps:
+                return new JsonObject
+                {
+                    ["kind"] = "points",
+                    ["count"] = ps.Count,
+                    ["present"] = ps.Present,
+                    ["complete"] = ps.Complete,
+                    ["points"] = new JsonArray(ps.Points.Select(p => (JsonNode)new JsonObject { ["x"] = p.X, ["y"] = p.Y, ["confidence"] = p.Confidence }).ToArray()),
+                    ["image"] = ps.Image,
+                    ["width"] = ps.Width,
+                    ["height"] = ps.Height,
+                };
+            case BoxesAnswer bs:
+                return new JsonObject
+                {
+                    ["kind"] = "boxes",
+                    ["count"] = bs.Count,
+                    ["present"] = bs.Present,
+                    ["complete"] = bs.Complete,
+                    ["boxes"] = new JsonArray(bs.Boxes.Select(b => (JsonNode)new JsonObject { ["x1"] = b.X1, ["y1"] = b.Y1, ["x2"] = b.X2, ["y2"] = b.Y2, ["confidence"] = b.Confidence }).ToArray()),
+                    ["image"] = bs.Image,
+                    ["width"] = bs.Width,
+                    ["height"] = bs.Height,
                 };
             case BoxAnswer b:
                 return new JsonObject

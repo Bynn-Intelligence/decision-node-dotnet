@@ -7,7 +7,8 @@ namespace Bynn.DecisionNode;
 
 /// <summary>
 /// One answer of a decision: a <see cref="TruthAnswer"/>, <see cref="ChoiceAnswer"/>,
-/// <see cref="ScoreAnswer"/>, <see cref="NumberAnswer"/>, <see cref="PointAnswer"/> or <see cref="BoxAnswer"/>. An answer of a type this version of the library does not
+/// <see cref="ScoreAnswer"/>, <see cref="NumberAnswer"/>, <see cref="PointAnswer"/>, <see cref="BoxAnswer"/>,
+/// <see cref="PointsAnswer"/> or <see cref="BoxesAnswer"/>. An answer of a type this version of the library does not
 /// know, or of a known type with missing or wrongly typed fields, is an
 /// <see cref="UnknownAnswer"/> holding its raw fields, so a new question type on the
 /// server does not break an older client.
@@ -50,6 +51,14 @@ public abstract class Answer
     /// <exception cref="InvalidCastException">The answer is of another type.</exception>
     public BoxAnswer AsBox() => As<BoxAnswer>();
 
+    /// <summary>This answer as a <see cref="PointsAnswer"/>.</summary>
+    /// <exception cref="InvalidCastException">The answer is of another type.</exception>
+    public PointsAnswer AsPoints() => As<PointsAnswer>();
+
+    /// <summary>This answer as a <see cref="BoxesAnswer"/>.</summary>
+    /// <exception cref="InvalidCastException">The answer is of another type.</exception>
+    public BoxesAnswer AsBoxes() => As<BoxesAnswer>();
+
     private T As<T>() where T : Answer =>
         this as T ?? throw new InvalidCastException($"the answer is of type '{Type}', not {typeof(T).Name}");
 
@@ -83,6 +92,25 @@ public abstract class Answer
                     Number(raw, "confidence"),
                     ScoreProbabilities(raw),
                     Legend(raw)),
+                // Several places (a question asked with max), told by the answer's own list.
+                "point" when raw.ContainsKey("points") || raw.ContainsKey("boxes") => new PointsAnswer(
+                    raw,
+                    Count(raw, "count"),
+                    Number(raw, "present"),
+                    Number(raw, "complete"),
+                    Places(raw, "points", p => new PlacePoint(Number(p, "x"), Number(p, "y"), Number(p, "confidence"))),
+                    Text(raw, "image"),
+                    Number(raw, "width"),
+                    Number(raw, "height")),
+                "box" when raw.ContainsKey("points") || raw.ContainsKey("boxes") => new BoxesAnswer(
+                    raw,
+                    Count(raw, "count"),
+                    Number(raw, "present"),
+                    Number(raw, "complete"),
+                    Places(raw, "boxes", b => new PlaceBox(Number(b, "x1"), Number(b, "y1"), Number(b, "x2"), Number(b, "y2"), Number(b, "confidence"))),
+                    Text(raw, "image"),
+                    Number(raw, "width"),
+                    Number(raw, "height")),
                 "point" => new PointAnswer(
                     raw,
                     Number(raw, "x"),
@@ -124,6 +152,16 @@ public abstract class Answer
 
     private static string Text(JsonObject raw, string field) =>
         JsonValues.AsString(raw[field]) ?? throw new MalformedAnswer();
+
+    /// <summary>A JSON integer of at least 0.</summary>
+    private static long Count(JsonObject raw, string field) =>
+        JsonValues.AsInteger(raw[field]) is { } n && n >= 0 && n <= long.MaxValue ? (long)n : throw new MalformedAnswer();
+
+    /// <summary>A list of places, each an object read by <paramref name="read"/>, in the order received.</summary>
+    private static IReadOnlyList<T> Places<T>(JsonObject raw, string field, Func<JsonObject, T> read) =>
+        raw[field] is JsonArray list
+            ? list.Select(item => item is JsonObject o ? read(o) : throw new MalformedAnswer()).ToList()
+            : throw new MalformedAnswer();
 
     private static IReadOnlyDictionary<string, double> ChoiceProbabilities(JsonObject raw)
     {
@@ -373,3 +411,98 @@ public sealed class BoxAnswer : Answer
     /// <summary>The image's height in pixels.</summary>
     public double Height { get; }
 }
+
+/// <summary>
+/// The answer to a <c>point</c> question asked with <c>max</c>: up to that many spots in an
+/// image, left to right by the centre. Every number is as received: whole pixels, or fractions
+/// of the width and height with <c>units: "normalized"</c>.
+/// </summary>
+public sealed class PointsAnswer : Answer
+{
+    internal PointsAnswer(JsonObject raw, long count, double present, double complete, IReadOnlyList<PlacePoint> points, string image, double width, double height)
+        : base(raw)
+    {
+        Count = count;
+        Present = present;
+        Complete = complete;
+        Points = points;
+        Image = image;
+        Width = width;
+        Height = height;
+    }
+
+    /// <summary>How many places the model read, 0 to <c>max</c>; the list can be shorter, since places that are the same thing are merged.</summary>
+    public long Count { get; }
+
+    /// <summary>The probability that at least one such thing is in the image.</summary>
+    public double Present { get; }
+
+    /// <summary>The probability that nothing was left out: that the true number is not above <c>max</c>. Low when the picture holds more than was asked for.</summary>
+    public double Complete { get; }
+
+    /// <summary>The spots in the order received (left to right by the centre, ties from the top); empty when none was found.</summary>
+    public IReadOnlyList<PlacePoint> Points { get; }
+
+    /// <summary>The id of the image looked in.</summary>
+    public string Image { get; }
+
+    /// <summary>The image's width in pixels.</summary>
+    public double Width { get; }
+
+    /// <summary>The image's height in pixels.</summary>
+    public double Height { get; }
+}
+
+/// <summary>
+/// The answer to a <c>box</c> question asked with <c>max</c>: up to that many rectangles in an
+/// image, left to right by the centre. Every number is as received.
+/// </summary>
+public sealed class BoxesAnswer : Answer
+{
+    internal BoxesAnswer(JsonObject raw, long count, double present, double complete, IReadOnlyList<PlaceBox> boxes, string image, double width, double height)
+        : base(raw)
+    {
+        Count = count;
+        Present = present;
+        Complete = complete;
+        Boxes = boxes;
+        Image = image;
+        Width = width;
+        Height = height;
+    }
+
+    /// <summary>How many places the model read, 0 to <c>max</c>; the list can be shorter, since places that are the same thing are merged.</summary>
+    public long Count { get; }
+
+    /// <summary>The probability that at least one such thing is in the image.</summary>
+    public double Present { get; }
+
+    /// <summary>The probability that nothing was left out: that the true number is not above <c>max</c>. Low when the picture holds more than was asked for.</summary>
+    public double Complete { get; }
+
+    /// <summary>The rectangles in the order received (left to right by the centre, ties from the top); empty when none was found.</summary>
+    public IReadOnlyList<PlaceBox> Boxes { get; }
+
+    /// <summary>The id of the image looked in.</summary>
+    public string Image { get; }
+
+    /// <summary>The image's width in pixels.</summary>
+    public double Width { get; }
+
+    /// <summary>The image's height in pixels.</summary>
+    public double Height { get; }
+}
+
+/// <summary>One spot of a <see cref="PointsAnswer"/>, from the image's top-left corner.</summary>
+/// <param name="X">The distance from the left edge.</param>
+/// <param name="Y">The distance from the top edge.</param>
+/// <param name="Confidence">The probability that this place is right.</param>
+public sealed record PlacePoint(double X, double Y, double Confidence);
+
+/// <summary>One rectangle of a <see cref="BoxesAnswer"/>: its top-left and bottom-right corners.</summary>
+/// <param name="X1">The left edge.</param>
+/// <param name="Y1">The top edge.</param>
+/// <param name="X2">The right edge.</param>
+/// <param name="Y2">The bottom edge.</param>
+/// <param name="Confidence">The probability that this place is right.</param>
+public sealed record PlaceBox(double X1, double Y1, double X2, double Y2, double Confidence);

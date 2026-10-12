@@ -186,8 +186,9 @@ public sealed class Question
     /// <param name="instructions">What to find: a phrase, a description with conditions, or a question. Required by the API.</param>
     /// <param name="image">The id of the image to look in, a string; required when the request carries two or more images. Left out when <c>null</c>. A reference by number ("Picture 2") goes in the instructions.</param>
     /// <param name="units"><c>pixels</c> (the default) or <c>normalized</c> (fractions of the width and height). Left out when <c>null</c>.</param>
-    public static Question Point(object? instructions, string? image = null, string? units = null) =>
-        Place("point", instructions, image, units);
+    /// <param name="max">Up to this many spots, 2 to 16: the answer is then a <see cref="PointsAnswer"/>. Left out when <c>null</c>.</param>
+    public static Question Point(object? instructions, string? image = null, string? units = null, int? max = null) =>
+        Place("point", instructions, image, units, max);
 
     /// <summary>
     /// A rectangle in an image, answered as its top-left (<c>x1</c>, <c>y1</c>) and bottom-right
@@ -197,10 +198,11 @@ public sealed class Question
     /// <param name="instructions">What to find: a phrase, a description with conditions, or a question. Required by the API.</param>
     /// <param name="image">The id of the image to look in, a string; required when the request carries two or more images. Left out when <c>null</c>. A reference by number ("Picture 2") goes in the instructions.</param>
     /// <param name="units"><c>pixels</c> (the default) or <c>normalized</c> (fractions of the width and height). Left out when <c>null</c>.</param>
-    public static Question Box(object? instructions, string? image = null, string? units = null) =>
-        Place("box", instructions, image, units);
+    /// <param name="max">Up to this many rectangles, 2 to 16: the answer is then a <see cref="BoxesAnswer"/>. Left out when <c>null</c>.</param>
+    public static Question Box(object? instructions, string? image = null, string? units = null, int? max = null) =>
+        Place("box", instructions, image, units, max);
 
-    private static Question Place(string type, object? instructions, string? image, string? units)
+    private static Question Place(string type, object? instructions, string? image, string? units, int? max)
     {
         var q = new JsonObject { ["type"] = type };
         if (instructions is not null)
@@ -214,6 +216,10 @@ public sealed class Question
         if (units is not null)
         {
             q["units"] = units;
+        }
+        if (max is { } most)
+        {
+            q["max"] = most;
         }
         return new Question(q);
     }

@@ -55,8 +55,8 @@ The values you read are the values the API sent: nothing is rounded, renormalise
 | `Choice(instructions, options)` | Which one option fits? `options` is a list of names or a map of name to description. | `ChoiceAnswer.Choice`, `.Confidence`, `.Probabilities` by option name |
 | `Score(instructions, levels)` | Where on this scale, from low to high? Up to 10 levels. | `ScoreAnswer.Score`, `.Confidence`, `.Probabilities` and `.Legend` by level index |
 | `Number(instructions, min, max, step)` | Which value on this grid? Defaults 0, 255 and 1 when left out; at most 4,096 values. | `NumberAnswer.Number`, `.Expected`, `.Confidence`, `.Probabilities` by value as the server wrote it (`"7"`, `"3.5"`) |
-| `Point(instructions, image, units)` | Where is it in the image? One spot. | `PointAnswer.X`, `.Y`, `.Present`, `.Confidence`, `.Image`, `.Width`, `.Height` (see Points and boxes) |
-| `Box(instructions, image, units)` | Where is it in the image? A rectangle. | `BoxAnswer.X1`, `.Y1`, `.X2`, `.Y2`, `.Present`, `.Confidence`, `.Image`, `.Width`, `.Height` |
+| `Point(instructions, image, units, max)` | Where is it in the image? One spot, or with `max` up to that many. | `PointAnswer.X`, `.Y`, `.Present`, `.Confidence`, `.Image`, `.Width`, `.Height`; with `max` a `PointsAnswer` (see Points and boxes) |
+| `Box(instructions, image, units, max)` | Where is it in the image? A rectangle, or with `max` up to that many. | `BoxAnswer.X1`, `.Y1`, `.X2`, `.Y2`, `.Present`, `.Confidence`, `.Image`, `.Width`, `.Height`; with `max` a `BoxesAnswer` |
 
 `state`, instructions, descriptions and levels take a string or any JSON-serialisable value: an anonymous object, a record, a `JsonNode`. The wire form works too, so a request copied from the API documentation runs unchanged:
 
@@ -200,6 +200,27 @@ Console.WriteLine(d.Truth("any_damage").Truth);
 Coordinates are whole pixels of the image as sent (after its EXIF orientation), or fractions of the width and height from 0 to 1 with `units: "normalized"`. Every number is as received. `image` names the image to look in by its id, a string, and is needed when the request carries two or more images; with one image it can be left out. A reference by number ("Picture 2") goes in the instructions.
 
 Before anything is sent the library checks that the request carries an image, that `image` names one of the request's images (a video's id is not an image's), that `units` is `pixels` or `normalized`, and that the question has instructions. A fault throws the `ValidationError` the API would answer, with every fault of the request in its `Entries`, or the `BadRequestError` for missing instructions. Points and boxes go with `DecideAsync`, `DecideManyAsync` and batch lines.
+
+### Several places in one answer
+
+With `max` (2 to 16), a point or box question answers every place the instructions describe, up to `max`, instead of the one best match:
+
+```csharp
+var d = await dn.DecideAsync(
+    state: "Lot camera 2.",
+    questions: new Dictionary<string, Question> { ["cars"] = Box("Every car in the lot.", max: 8) },
+    images: new[] { Image.FromUrl("lot", "https://files.example.com/lot/0917.jpg") });
+
+var cars = d.Boxes("cars");
+Console.WriteLine(cars.Count);       // 5: how many places the model read
+Console.WriteLine(cars.Complete);    // 0.94: the probability that none was left out
+foreach (var car in cars.Boxes)      // left to right by the centre
+{
+    Console.WriteLine($"{car.X1}, {car.Y1} to {car.X2}, {car.Y2} ({car.Confidence})");
+}
+```
+
+A `PointsAnswer` (`d.Points(id)`) holds `Points`, each a `PlacePoint` (`X`, `Y`, `Confidence`); a `BoxesAnswer` (`d.Boxes(id)`) holds `Boxes`, each a `PlaceBox` (`X1`, `Y1`, `X2`, `Y2`, `Confidence`). Both carry `Count`, `Present` (the probability that at least one such thing is there), `Complete` (the probability that nothing was left out; low when the picture holds more than `max`, so raise `max` or narrow the instructions), `Image`, `Width` and `Height`. The places come in the order received, the numbers as received; the list can be shorter than `Count`, since two places that are the same thing are merged. The answer's own list tells the shape: a question asked with `max` may still come back as a single `PointAnswer` or `BoxAnswer`. A `max` that is not a whole number from 2 to 16 throws the API's `ValidationError` before anything is sent; whether a model answers several places is the API's to judge.
 
 ## Videos
 

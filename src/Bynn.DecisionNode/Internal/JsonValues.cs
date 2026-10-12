@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -148,6 +149,24 @@ internal static class JsonValues
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// A JSON integer as it is written on the wire (digits, an optional minus, no fraction or
+    /// exponent), of any size; <c>null</c> for anything else, <c>2.0</c>, <c>"8"</c> and
+    /// <c>true</c> included. The API judges integers by their text, so this does too.
+    /// </summary>
+    internal static System.Numerics.BigInteger? AsInteger(JsonNode? node)
+    {
+        if (node is not JsonValue v || v.GetValueKind() != JsonValueKind.Number)
+        {
+            return null;
+        }
+        var text = v.ToJsonString();
+        var digits = text.StartsWith('-') ? text[1..] : text;
+        return digits.Length > 0 && digits.All(char.IsAsciiDigit)
+            ? System.Numerics.BigInteger.Parse(text, CultureInfo.InvariantCulture)
+            : null;
     }
 
     internal static long? AsLong(JsonNode? node)

@@ -228,6 +228,9 @@ internal static class LocalChecks
     /// A point or box question: its <c>422</c> entries (the image, then the units), then
     /// missing instructions as the API's plain-string <c>400</c>.
     /// </summary>
+    /// <summary>The fewest and the most places a point or box question's <c>max</c> asks for.</summary>
+    private const int PlacesMin = 2, PlacesMax = 16;
+
     private static void Place(string id, JsonObject q, string type, JsonArray loc, List<JsonNode?> entries, List<DecisionNodeError> deferred, IReadOnlyList<string>? imageIds)
     {
         if (imageIds is not null)
@@ -256,6 +259,23 @@ internal static class LocalChecks
         if (q["units"] is { } units && (JsonValues.AsString(units) is not { } unit || Array.IndexOf(Units, unit) < 0))
         {
             entries.Add(Entry("literal_error", Loc(loc, "units"), "Input should be 'pixels' or 'normalized'", units, new JsonObject { ["expected"] = "'pixels' or 'normalized'" }));
+        }
+        // Several places: max an integer from 2 to 16, on a session's open too. Whether the model
+        // answers several places is always the server's to judge.
+        if (q["max"] is { } most)
+        {
+            if (JsonValues.AsInteger(most) is not { } n)
+            {
+                entries.Add(Entry("int_type", Loc(loc, "max"), "Input should be a valid integer", most));
+            }
+            else if (n < PlacesMin)
+            {
+                entries.Add(Entry("greater_than_equal", Loc(loc, "max"), $"Input should be greater than or equal to {PlacesMin}", most, new JsonObject { ["ge"] = PlacesMin }));
+            }
+            else if (n > PlacesMax)
+            {
+                entries.Add(Entry("less_than_equal", Loc(loc, "max"), $"Input should be less than or equal to {PlacesMax}", most, new JsonObject { ["le"] = PlacesMax }));
+            }
         }
         if (q["instructions"] is null)
         {
