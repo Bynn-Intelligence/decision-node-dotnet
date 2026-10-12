@@ -1001,9 +1001,9 @@ internal static class LocalChecks
     internal const int MaxCollectionName = 80, MaxItemReference = 64, MaxItemLabel = 128;
 
     /// <summary>The characters a reference is written in, as the API states the pattern.</summary>
-    internal const string ItemReferencePattern = "^[A-Za-z0-9_.:-]+$";
+    internal const string ItemReferencePattern = "^[A-Za-z0-9_.:-]{1,64}$";
 
-    private static readonly System.Text.RegularExpressions.Regex ItemReference = new(@"\A[A-Za-z0-9_.:-]+\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex ItemReference = new(@"\A[A-Za-z0-9_.:-]{1,64}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>A collection's create: a type other than <c>face</c>, then a name not 1 to 80 characters.</summary>
     internal static void CollectionCreate(string? name, string? type)
@@ -1020,7 +1020,10 @@ internal static class LocalChecks
         }
     }
 
-    /// <summary>An enrollment: the image present, a reference 1 to 64 of the pattern's characters, a label of at most 128.</summary>
+    /// <summary>
+    /// An enrollment: the image present, a reference of at most 64 characters, then of the
+    /// pattern (an empty reference fails it), and a label of at most 128.
+    /// </summary>
     internal static void CollectionEnroll(Image? image, string? reference, string? label)
     {
         var entries = new List<JsonNode?>();
@@ -1028,7 +1031,14 @@ internal static class LocalChecks
         {
             entries.Add(Entry("missing", new JsonArray("body", "image"), "Field required", new JsonObject { ["reference"] = reference }));
         }
-        entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, 1, MaxItemReference, ItemReferencePattern));
+        if (reference is null)
+        {
+            entries.Add(Entry("missing", new JsonArray("body", "reference"), "Field required", null));
+        }
+        else
+        {
+            entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, 0, MaxItemReference, ItemReferencePattern));
+        }
         if (label is not null)
         {
             entries.AddRange(StringEntries(new JsonArray("body", "label"), label, 0, MaxItemLabel, null));

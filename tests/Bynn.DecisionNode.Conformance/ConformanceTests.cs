@@ -689,6 +689,10 @@ public sealed class ConformanceTests
         {
             CheckAttempts(exp, log);
         }
+        if (exp["same_header"] is JsonObject sameHeader)
+        {
+            CheckSameHeader(sameHeader, log);
+        }
         if (exp["request_sequence"] is JsonArray sequence)
         {
             CheckSequence(sequence, log);
@@ -872,6 +876,31 @@ public sealed class ConformanceTests
             {
                 throw Fail($"{where}: unknown step {string.Join(", ", step.Select(kv => kv.Key))}");
             }
+        }
+    }
+
+    /// <summary>
+    /// Suite 1.13: every logged attempt matching <c>path_suffix</c> and <c>method</c> (when
+    /// given) carries one and the same value of the header, at least <c>min</c> (default 2) of
+    /// them, the value matching <c>pattern</c> when given: an Idempotency-Key kept across retries.
+    /// </summary>
+    private static void CheckSameHeader(JsonObject spec, JsonArray log)
+    {
+        var name = ((string)spec["name"]!).ToLowerInvariant();
+        var suffix = (string?)spec["path_suffix"];
+        var method = (string?)spec["method"];
+        var values = log.OfType<JsonObject>()
+            .Where(r => (suffix is null || ((string)r["path"]!).EndsWith(suffix, StringComparison.Ordinal)) && (method is null || (string?)r["method"] == method))
+            .Select(r => (r["headers"] as JsonObject)?.FirstOrDefault(h => string.Equals(h.Key, name, StringComparison.OrdinalIgnoreCase)).Value is JsonValue v ? (string?)v : null)
+            .ToList();
+        var least = spec["min"] is { } m ? (int)m : 2;
+        if (values.Count < least || values.Any(v => v is null) || values.Distinct().Count() != 1)
+        {
+            throw Fail($"same_header {name}: expected one value on every attempt, got [{string.Join(", ", values.Select(v => v ?? "null"))}]");
+        }
+        if ((string?)spec["pattern"] is { } pattern && !System.Text.RegularExpressions.Regex.IsMatch(values[0]!, pattern))
+        {
+            throw Fail($"same_header {name}: '{values[0]}' does not match {pattern}");
         }
     }
 

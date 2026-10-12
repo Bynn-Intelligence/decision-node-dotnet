@@ -110,50 +110,91 @@ public class CollectionsTests
     }
 
     [Fact]
-    public async Task EnrollChecksTheReferenceTheLabelAndTheImageLocally()
+    public async Task EnrollChecksTheReferenceTheLabelAndTheImageUrlLocally()
     {
+        // The length first, then the pattern, which an empty reference fails too.
         var empty = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, ""));
-        Assert.Equal("string_too_short", (string?)empty["type"]);
-        Assert.Equal("""["body","reference"]""", empty["loc"]!.ToJsonString());
+        Assert.Equal(("string_pattern_mismatch", """["body","reference"]"""), ((string?)empty["type"], empty["loc"]!.ToJsonString()));
         var tooLong = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, new string('r', 65)));
         Assert.Equal(("string_too_long", 64), ((string?)tooLong["type"], (int)tooLong["ctx"]!["max_length"]!));
         var pattern = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp 1042"));
-        Same("""{"type":"string_pattern_mismatch","loc":["body","reference"],"msg":"String should match pattern '^[A-Za-z0-9_.:-]+$'","input":"emp 1042","ctx":{"pattern":"^[A-Za-z0-9_.:-]+$"}}""", pattern);
+        Same("""{"type":"string_pattern_mismatch","loc":["body","reference"],"msg":"String should match pattern '^[A-Za-z0-9_.:-]{1,64}$'","input":"emp 1042","ctx":{"pattern":"^[A-Za-z0-9_.:-]{1,64}$"}}""", pattern);
         var newline = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp-1042\n"));
         Assert.Equal("string_pattern_mismatch", (string?)newline["type"]);
         var label = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp-1042", new string('l', 129)));
         Assert.Equal(("string_too_long", """["body","label"]"""), ((string?)label["type"], label["loc"]!.ToJsonString()));
 
-        // The image is checked as a decision's: a URL that is not https is the API's 400.
-        var stub = new StubHandler((_, _) => Ok());
+        // Only a URL's rules are checked locally: a URL that is not https is refused, while a
+        // picture the server cannot read is the server's 422 to answer.
+        var stub = new StubHandler((_, _) => Json(201, """{"id":"itm_1"}"""));
         using var dn = Client(stub);
         await Assert.ThrowsAsync<BadRequestError>(() => dn.Collections.EnrollAsync(Id, Image.FromUrl("badge", "http://files.example.com/b.jpg"), "emp-1042"));
         Assert.Empty(stub.Requests);
+        await dn.Collections.EnrollAsync(Id, Image.FromUploadId("badge", "upl_0000000000000000000000000000000a", "image/gif"), "emp-1042");
+        Assert.Single(stub.Requests);
+    }
+
+    private const string Busy = """{"detail":{"error_type":"api_error","message":""}}""";
+
+    private static string? Key(Recorded r) => r.Headers.TryGetValue("Idempotency-Key", out var v) ? v : null;
+
+    [Fact]
+    public async Task CreateAndEnrollCarryOneKeyAcrossTheirAttemptsAndANewOnePerCall()
+    {
+        var stub = new StubHandler((_, i) => i % 2 == 0 ? Json(500, Busy) : Json(201, Created));
+        using var dn = Client(stub, maxRetries: 2);
+        await dn.Collections.CreateAsync("Staff");
+        await dn.Collections.EnrollAsync(Id, Badge, "emp-1042");
+        var keys = stub.Requests.Select(Key).ToList();
+        Assert.Equal(4, keys.Count);
+        Assert.All(keys, k => Assert.Matches("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", k!));
+        Assert.Equal(keys[0], keys[1]);
+        Assert.Equal(keys[2], keys[3]);
+        Assert.NotEqual(keys[0], keys[2]);
     }
 
     [Fact]
-    public async Task CreateAndEnrollAreRetriedOnlyOn429And529()
+    public async Task ReadsAndDeletesCarryNoKey()
     {
-        var fails = new StubHandler((_, _) => Json(500, """{"detail":{"error_type":"api_error","message":""}}"""));
-        using (var dn = Client(fails, maxRetries: 2))
-        {
-            await Assert.ThrowsAsync<ServerError>(() => dn.Collections.CreateAsync("Staff"));
-            await Assert.ThrowsAsync<ServerError>(() => dn.Collections.EnrollAsync(Id, Badge, "emp-1042"));
-        }
-        Assert.Equal(2, fails.Requests.Count);
+        var stub = new StubHandler((_, _) => Ok(Created));
+        using var dn = Client(stub);
+        await dn.Collections.GetAsync(Id);
+        await dn.Collections.DeleteAsync(Id);
+        await dn.Collections.ListItemsAsync(Id);
+        await dn.Collections.DeleteItemAsync(Id, "itm_1");
+        Assert.All(stub.Requests, r => Assert.Null(Key(r)));
+    }
 
-        var busy = new StubHandler((_, i) => i == 0 ? Json(529, """{"detail":{"error_type":"overloaded_error","message":""}}""", ("retry-after-ms", "1")) : Json(201, Created));
-        using (var dn = Client(busy, maxRetries: 2))
-        {
-            await dn.Collections.CreateAsync("Staff");
-        }
-        Assert.Equal(2, busy.Requests.Count);
+    [Fact]
+    public async Task AnEnrollmentStillRunningIsRetriedAfterItsWait()
+    {
+        var stub = new StubHandler((_, i) => i == 0
+            ? Json(409, """{"detail":{"error_type":"idempotency_in_progress","message":"A request with this key is running."}}""", ("retry-after-ms", "1"))
+            : Json(201, """{"id":"itm_1"}"""));
+        using var dn = Client(stub, maxRetries: 2);
+        var item = await dn.Collections.EnrollAsync(Id, Badge, "emp-1042");
+        Assert.Equal("itm_1", (string?)item["id"]);
+        Assert.Equal(2, stub.Requests.Count);
+        Assert.Single(stub.Requests.Select(Key).Distinct());
+    }
 
-        var read = new StubHandler((_, i) => i == 0 ? Json(500, """{"detail":{"error_type":"api_error","message":""}}""") : Ok(Created));
-        using (var dn = Client(read, maxRetries: 2))
-        {
-            await dn.Collections.GetAsync(Id);
-        }
+    [Fact]
+    public async Task AReusedKeyIsTheBaseErrorAndNeverRetried()
+    {
+        var stub = new StubHandler((_, _) => Json(409, """{"detail":{"error_type":"idempotency_key_reused","message":"This key was used for another request."}}"""));
+        using var dn = Client(stub, maxRetries: 2);
+        var error = await Assert.ThrowsAsync<DecisionNodeError>(() => dn.Collections.EnrollAsync(Id, Badge, "emp-1042"));
+        Assert.Equal(typeof(DecisionNodeError), error.GetType());
+        Assert.Equal((409, "idempotency_key_reused"), (error.Status, error.ErrorType));
+        Assert.Single(stub.Requests);
+    }
+
+    [Fact]
+    public async Task ReadsAreRetriedAsAnyCall()
+    {
+        var read = new StubHandler((_, i) => i == 0 ? Json(500, Busy) : Ok(Created));
+        using var dn = Client(read, maxRetries: 2);
+        await dn.Collections.GetAsync(Id);
         Assert.Equal(2, read.Requests.Count);
     }
 

@@ -7,9 +7,11 @@ namespace Bynn.DecisionNode;
 /// <summary>
 /// A workspace's collections of faces, and the public collections it may use, which the
 /// <c>face_recognition</c> booster searches. Every call returns the API's object exactly as
-/// sent. <see cref="CreateAsync"/> and <see cref="EnrollAsync"/> are retried only on <c>429</c>
-/// and <c>529</c>, which the API answers before applying anything, since a repeated enrollment
-/// would enroll the face twice and bill it twice; the reads and deletes are retried as any call.
+/// sent. <see cref="CreateAsync"/> and <see cref="EnrollAsync"/> send an <c>Idempotency-Key</c>,
+/// a new one per call and the same on every attempt of it, so the API creates, enrolls and bills
+/// once however often the call is tried; they are retried as any call, and also on a <c>409</c>
+/// <c>idempotency_in_progress</c>. A <c>409</c> <c>idempotency_key_reused</c> is thrown as the
+/// base <see cref="DecisionNodeError"/>. The reads and deletes carry no key.
 /// </summary>
 public sealed class CollectionsClient
 {
@@ -29,7 +31,7 @@ public sealed class CollectionsClient
     {
         LocalChecks.CollectionCreate(name, type);
         var body = new JsonObject { ["type"] = type, ["name"] = name };
-        return await ObjectAsync(HttpMethod.Post, "/v1/collections", body, DecisionNodeClient.RetryPolicy.Mutation, cancellationToken).ConfigureAwait(false);
+        return await ObjectAsync(HttpMethod.Post, "/v1/collections", body, DecisionNodeClient.RetryPolicy.Idempotent, cancellationToken, NewKey()).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -65,19 +67,24 @@ public sealed class CollectionsClient
     /// <param name="label">An optional label of at most 128 characters; left out when <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <exception cref="ValidationError">A reference or label out of its bounds; nothing is sent.</exception>
-    /// <exception cref="BadRequestError">The image breaks one of the API's image rules; nothing is sent.</exception>
+    /// <exception cref="BadRequestError">The image's URL breaks the API's URL rules (<c>image_url_refused</c>); nothing is sent.</exception>
     public async Task<JsonObject> EnrollAsync(string collectionId, Image image, string reference, string? label = null, CancellationToken cancellationToken = default)
     {
         LocalChecks.CollectionEnroll(image, reference, label);
+        // Only a URL's rules are checked here; every other fault of the picture is the
+        // server's 422 image_unreadable.
+        if (image.Url is { } url)
+        {
+            LocalChecks.Url(image.Id, url);
+        }
         var images = new[] { image };
-        LocalChecks.Images(images, _client.Held(null));
         var (wires, _) = await _client.PlaceImagesAsync(images, cancellationToken).ConfigureAwait(false);
         var body = new JsonObject { ["image"] = wires![0]!.DeepClone(), ["reference"] = reference };
         if (label is not null)
         {
             body["label"] = label;
         }
-        return await ObjectAsync(HttpMethod.Post, Path(collectionId) + "/items", body, DecisionNodeClient.RetryPolicy.Mutation, cancellationToken).ConfigureAwait(false);
+        return await ObjectAsync(HttpMethod.Post, Path(collectionId) + "/items", body, DecisionNodeClient.RetryPolicy.Idempotent, cancellationToken, NewKey()).ConfigureAwait(false);
     }
 
     /// <summary>A page of a collection's items (<c>GET /v1/collections/{id}/items</c>); <paramref name="offset"/> and <paramref name="limit"/> sent only when given.</summary>
@@ -108,7 +115,10 @@ public sealed class CollectionsClient
         return "/v1/collections/" + Uri.EscapeDataString(collectionId);
     }
 
-    private async Task<JsonObject> ObjectAsync(HttpMethod method, string path, JsonObject? body, DecisionNodeClient.RetryPolicy policy, CancellationToken ct)
+    /// <summary>A new idempotency key: a version 4 UUID.</summary>
+    private static string NewKey() => Guid.NewGuid().ToString("D");
+
+    private async Task<JsonObject> ObjectAsync(HttpMethod method, string path, JsonObject? body, DecisionNodeClient.RetryPolicy policy, CancellationToken ct, string? idempotencyKey = null)
     {
         var (parsed, result) = await _client.SendJsonAsync(
             method,
@@ -116,7 +126,8 @@ public sealed class CollectionsClient
             body is null ? null : JsonValues.ToUtf8(body),
             body is null ? null : DecisionNodeClient.JsonContentType,
             policy,
-            ct).ConfigureAwait(false);
+            ct,
+            idempotencyKey is null ? null : new DecisionNodeClient.AttemptPlan(null, true, idempotencyKey)).ConfigureAwait(false);
         return parsed as JsonObject ?? throw new ServerError(new ErrorDetails
         {
             Status = result.Status,

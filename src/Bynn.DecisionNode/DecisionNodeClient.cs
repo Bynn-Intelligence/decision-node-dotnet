@@ -848,7 +848,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// How one call's attempts run: the time allowed for each (<c>null</c>: the client's
     /// <see cref="Timeout"/>) and whether a timed-out attempt is retried.
     /// </summary>
-    internal sealed record AttemptPlan(TimeSpan? Timeout, bool RetryTimeouts)
+    internal sealed record AttemptPlan(TimeSpan? Timeout, bool RetryTimeouts, string? IdempotencyKey = null)
     {
         public static readonly AttemptPlan Default = new(null, true);
     }
@@ -867,6 +867,13 @@ public sealed partial class DecisionNodeClient : IDisposable
 
         /// <summary>As <see cref="Default"/>, except a 429 <c>session_limit_exceeded</c>, which waiting does not fix.</summary>
         SessionOpen,
+
+        /// <summary>
+        /// A call that carries its own <c>Idempotency-Key</c>, the same on every attempt, so the
+        /// server applies it once however often it is tried: as <see cref="Default"/>, and also a
+        /// <c>409</c> <c>idempotency_in_progress</c>, after its wait.
+        /// </summary>
+        Idempotent,
     }
 
     /// <summary>Sends a request with retries and parses the JSON body of its 2xx answer.</summary>
@@ -917,7 +924,7 @@ public sealed partial class DecisionNodeClient : IDisposable
             Attempt result;
             try
             {
-                result = await SendOnceAsync(method, uri, path, body, contentType, stream, attemptTimeout, ct).ConfigureAwait(false);
+                result = await SendOnceAsync(method, uri, path, body, contentType, stream, attemptTimeout, plan.IdempotencyKey, ct).ConfigureAwait(false);
             }
             catch (DecisionNodeError lost) when (lost is TimeoutError or ConnectionError && policy != RetryPolicy.Mutation && attempt < MaxRetries
                 && (plan.RetryTimeouts || lost is not TimeoutError))
@@ -935,7 +942,8 @@ public sealed partial class DecisionNodeClient : IDisposable
             var error = ErrorFor(result);
             var retryable = policy == RetryPolicy.Mutation
                 ? result.Status is 429 or 529
-                : IsRetryable(result.Status) && error is not SessionLimitError;
+                : (IsRetryable(result.Status) && error is not SessionLimitError)
+                    || (policy == RetryPolicy.Idempotent && result.Status == 409 && error.ErrorType == "idempotency_in_progress");
             if (retryable && attempt < MaxRetries)
             {
                 await Delay(RetryWait(result.Header) ?? Backoff(attempt), ct).ConfigureAwait(false);
@@ -945,7 +953,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         }
     }
 
-    private async Task<Attempt> SendOnceAsync(HttpMethod method, Uri uri, string path, byte[]? body, string? contentType, bool stream, TimeSpan attemptTimeout, CancellationToken ct)
+    private async Task<Attempt> SendOnceAsync(HttpMethod method, Uri uri, string path, byte[]? body, string? contentType, bool stream, TimeSpan attemptTimeout, string? idempotencyKey, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(method, uri)
         {
@@ -973,6 +981,12 @@ public sealed partial class DecisionNodeClient : IDisposable
                 request.Headers.Remove(name);
                 request.Headers.TryAddWithoutValidation(name, value);
             }
+        }
+        if (idempotencyKey is not null)
+        {
+            // The call's own key, the same on every attempt; never one of the client's headers.
+            request.Headers.Remove("Idempotency-Key");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
         }
 
         // One deadline for the whole attempt: sending, the headers and the last byte of the body.
