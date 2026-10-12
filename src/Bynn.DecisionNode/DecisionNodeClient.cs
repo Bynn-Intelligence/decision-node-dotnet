@@ -145,6 +145,7 @@ public sealed partial class DecisionNodeClient : IDisposable
             _ownsHttp = true;
         }
         Batches = new BatchesClient(this);
+        Collections = new CollectionsClient(this);
     }
 
     /// <summary>
@@ -348,6 +349,9 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     /// <summary>The Batch API: create, add, finalize, get, list, results and cancel.</summary>
     public BatchesClient Batches { get; }
+
+    /// <summary>The workspace's collections of faces, which the <c>face_recognition</c> booster searches.</summary>
+    public CollectionsClient Collections { get; }
 
     /// <summary>
     /// The wait between attempts. Tests replace it to record the waits the client schedules

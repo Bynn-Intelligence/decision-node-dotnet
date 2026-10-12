@@ -390,6 +390,10 @@ public sealed class ConformanceTests
         {
             Match(Canon(page), Canon(Driver.Page((BatchPage)result!)), "batch_page");
         }
+        else if (CollectionKinds.FirstOrDefault(exp.ContainsKey) is { } collectionKind)
+        {
+            CheckCollectionResult(collectionKind, exp[collectionKind], result, collectionKind);
+        }
         else if (exp["batch_results"] is JsonArray results)
         {
             CheckBatchResults(results, (List<BatchResult>)result!, "batch_results");
@@ -434,6 +438,35 @@ public sealed class ConformanceTests
             one.Remove("index");
             CheckBatchResult(one, results[i], $"{path}.batch_results[{i}]");
         }
+    }
+
+    /// <summary>The collections calls' results (suite 1.13), each the API's object as sent; <c>collections</c> is the list.</summary>
+    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted" };
+
+    private static void CheckCollectionResult(string kind, JsonNode? expected, object? result, string path)
+    {
+        if (kind == "collections")
+        {
+            if (result is not IReadOnlyList<JsonObject> list)
+            {
+                throw Fail($"{path}: expected a list of collections, got {Describe(result)}");
+            }
+            var wanted = (JsonArray)expected!;
+            if (wanted.Count != list.Count)
+            {
+                throw Fail($"{path}: expected {wanted.Count} collections, got {list.Count}");
+            }
+            for (var i = 0; i < list.Count; i++)
+            {
+                Match(Canon(wanted[i]), Canon(list[i]), $"{path}[{i}]");
+            }
+            return;
+        }
+        if (result is not JsonObject obj)
+        {
+            throw Fail($"{path}: expected the API's object, got {Describe(result)}");
+        }
+        Match(Canon(expected), Canon(obj), path);
     }
 
     private static void CheckBatchResults(JsonArray expected, List<BatchResult> results, string path)
@@ -981,6 +1014,9 @@ public sealed class ConformanceTests
                     break;
                 case "batch_results":
                     CheckResultsSpec(spec, (List<BatchResult>)result!, path);
+                    break;
+                case var kind when CollectionKinds.Contains(kind):
+                    CheckCollectionResult(kind, spec[kind] ?? new JsonObject(), result, path + "." + kind);
                     break;
                 case "batch_run":
                     var run = (BatchRunResult)result!;

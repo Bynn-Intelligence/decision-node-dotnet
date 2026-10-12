@@ -169,6 +169,20 @@ public static class Driver
             "batches.list" => Wrap(client.Batches.ListAsync(args["offset"] is { } o ? (int)o : null, args["limit"] is { } l ? (int)l : null)),
             "batches.results" => ReadAll(client.Batches.ResultsAsync(Text("batch_id")!)),
             "batches.cancel" => Wrap(client.Batches.CancelAsync(Text("batch_id")!)),
+            "collections.create" => Wrap(client.Collections.CreateAsync(Text("name")!, args.ContainsKey("type") ? Text("type")! : "face")),
+            "collections.list" => Wrap(client.Collections.ListAsync()),
+            "collections.get" => Wrap(client.Collections.GetAsync(Text("collection_id")!)),
+            "collections.delete" => Wrap(client.Collections.DeleteAsync(Text("collection_id")!)),
+            "collections.enroll" => Wrap(client.Collections.EnrollAsync(
+                Text("collection_id")!,
+                args["image"] is JsonObject image ? ImageOf(image, ctx) : null!,
+                Text("reference")!,
+                Text("label"))),
+            "collections.list_items" => Wrap(client.Collections.ListItemsAsync(
+                Text("collection_id")!,
+                args["offset"] is { } io ? (int)io : null,
+                args["limit"] is { } il ? (int)il : null)),
+            "collections.delete_item" => Wrap(client.Collections.DeleteItemAsync(Text("collection_id")!, Text("item_id")!)),
             _ => throw new InvalidOperationException("unknown method " + method),
         };
     }
@@ -578,6 +592,7 @@ public static class Driver
         BatchPage p => Page(p),
         Session s => Session(s),
         IReadOnlyList<string> ids => new JsonArray(ids.Select(i => (JsonNode?)i).ToArray()),
+        IReadOnlyList<JsonObject> collections => new JsonArray(collections.Select(c => (JsonNode?)c.DeepClone()).ToArray()),
         JsonNode n => n,
         _ => throw new InvalidOperationException("no neutral form for " + value.GetType().Name),
     };
@@ -777,12 +792,20 @@ public static class Driver
             ["faces"] = f.Faces,
             ["detections"] = new JsonArray(f.Detections.Select(d => (JsonNode)new JsonObject { ["box"] = Box(d.Box), ["confidence"] = d.Confidence }).ToArray()),
         },
-        WantedPersonReading w => new JsonObject
+        FaceRecognitionReading w => new JsonObject
         {
-            ["kind"] = "wanted_person",
+            ["kind"] = "face_recognition",
             ["image"] = w.Image,
             ["faces"] = w.Faces,
-            ["matches"] = new JsonArray(w.Matches.Select(m => (JsonNode)new JsonObject { ["box"] = Box(m.Box), ["score"] = m.Score, ["reference"] = m.Reference }).ToArray()),
+            ["matches"] = new JsonArray(w.Matches.Select(m => (JsonNode)new JsonObject
+            {
+                ["box"] = Box(m.Box),
+                ["score"] = m.Score,
+                ["collection"] = m.Collection,
+                ["reference"] = m.Reference,
+                ["name"] = m.Name,
+                ["label"] = m.Label,
+            }).ToArray()),
         },
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
     };

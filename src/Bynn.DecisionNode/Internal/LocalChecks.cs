@@ -995,6 +995,76 @@ internal static class LocalChecks
         }
     }
 
+    // ------------------------------------------------------------------ collections
+
+    /// <summary>The longest collection name, item reference and item label, in characters (decided 2026-10-12).</summary>
+    internal const int MaxCollectionName = 80, MaxItemReference = 64, MaxItemLabel = 128;
+
+    /// <summary>The characters a reference is written in, as the API states the pattern.</summary>
+    internal const string ItemReferencePattern = "^[A-Za-z0-9_.:-]+$";
+
+    private static readonly System.Text.RegularExpressions.Regex ItemReference = new(@"\A[A-Za-z0-9_.:-]+\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>A collection's create: a type other than <c>face</c>, then a name not 1 to 80 characters.</summary>
+    internal static void CollectionCreate(string? name, string? type)
+    {
+        var entries = new List<JsonNode?>();
+        if (type != "face")
+        {
+            entries.Add(Entry("literal_error", new JsonArray("body", "type"), "Input should be 'face'", type is null ? null : JsonValue.Create(type), new JsonObject { ["expected"] = "'face'" }));
+        }
+        entries.AddRange(StringEntries(new JsonArray("body", "name"), name, 1, MaxCollectionName, null));
+        if (entries.Count > 0)
+        {
+            throw Unprocessable(entries);
+        }
+    }
+
+    /// <summary>An enrollment: the image present, a reference 1 to 64 of the pattern's characters, a label of at most 128.</summary>
+    internal static void CollectionEnroll(Image? image, string? reference, string? label)
+    {
+        var entries = new List<JsonNode?>();
+        if (image is null)
+        {
+            entries.Add(Entry("missing", new JsonArray("body", "image"), "Field required", new JsonObject { ["reference"] = reference }));
+        }
+        entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, 1, MaxItemReference, ItemReferencePattern));
+        if (label is not null)
+        {
+            entries.AddRange(StringEntries(new JsonArray("body", "label"), label, 0, MaxItemLabel, null));
+        }
+        if (entries.Count > 0)
+        {
+            throw Unprocessable(entries);
+        }
+    }
+
+    /// <summary>A string field's <c>422</c> entry: missing, too short, too long, or not of the pattern; its length in code points.</summary>
+    private static IEnumerable<JsonNode?> StringEntries(JsonArray loc, string? value, int least, int most, string? pattern)
+    {
+        if (value is null)
+        {
+            if (least > 0)
+            {
+                yield return Entry("missing", loc, "Field required", null);
+            }
+            yield break;
+        }
+        var length = value.EnumerateRunes().Count();
+        if (length < least)
+        {
+            yield return Entry("string_too_short", loc, $"String should have at least {least} character{(least == 1 ? string.Empty : "s")}", value, new JsonObject { ["min_length"] = least });
+        }
+        else if (length > most)
+        {
+            yield return Entry("string_too_long", loc, $"String should have at most {most} characters", value, new JsonObject { ["max_length"] = most });
+        }
+        else if (pattern is not null && !ItemReference.IsMatch(value))
+        {
+            yield return Entry("string_pattern_mismatch", loc, $"String should match pattern '{pattern}'", value, new JsonObject { ["pattern"] = pattern });
+        }
+    }
+
     // ------------------------------------------------------------------ errors and entries
 
     private static bool IsStringObjectOrArray(JsonNode? node) =>

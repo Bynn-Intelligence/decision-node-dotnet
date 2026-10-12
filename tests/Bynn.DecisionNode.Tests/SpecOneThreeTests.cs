@@ -347,14 +347,15 @@ public class SpecOneThreeTests
     [Fact]
     public void TheNewerBoosterNamesAndTheirOptions()
     {
-        Assert.Equal(("face_detection", "wanted_person", "ocr"), (Booster.FaceDetection, Booster.WantedPerson, Booster.Ocr));
+        Assert.Equal(("face_detection", "face_recognition", "ocr"), (Booster.FaceDetection, Booster.FaceRecognition, Booster.Ocr));
         Assert.Equal("\"face_detection\"", Booster.Of(Booster.FaceDetection).ToString());
         Assert.Equal(
             """{"name":"ocr","options":{"prompt":"the invoice total and date"}}""",
             Booster.Of(Booster.Ocr, options: new { prompt = "the invoice total and date" }).ToJson().ToJsonString());
+        // The collection and threshold options are sent as given.
         Assert.Equal(
-            """{"name":"wanted_person","options":{"threshold":0.9}}""",
-            Booster.Of(Booster.WantedPerson, options: new { threshold = 0.9 }).ToJson().ToJsonString());
+            """{"name":"face_recognition","options":{"collection":"celebrities","threshold":0.6}}""",
+            Booster.Of(Booster.FaceRecognition, options: new { collection = "celebrities", threshold = 0.6 }).ToJson().ToJsonString());
     }
 
     [Fact]
@@ -392,26 +393,47 @@ public class SpecOneThreeTests
     }
 
     [Fact]
-    public async Task WantedPersonReadingsAreTyped()
+    public async Task FaceRecognitionReadingsAreTyped()
     {
         const string body = """
             {"answers":{},"evidence":{
-              "wanted_person":{"version":"wanted_person-v1","status":"ok","latency_ms":40,"billed_calls":2,"results":[
-                {"image":"gate","faces":2,"matches":[{"box":{"x1":412,"y1":188,"x2":486,"y2":274},"score":0.93,"reference":"wanted:2024-12345"}]},
-                {"image":"yard","faces":1,"matches":[]},
+              "face_recognition":{"version":"face_recognition-v1","status":"ok","latency_ms":40,"billed_calls":3,"results":[
+                {"image":"a1b2","faces":3,"matches":[
+                  {"box":{"x1":0.12,"y1":0.3,"x2":0.37,"y2":0.7},"score":0.93,"collection":"celebrities","reference":"Q12345","name":"Jane Example"},
+                  {"box":{"x1":0.5,"y1":0.1,"x2":0.7,"y2":0.35},"score":0.81,"collection":"col_3f6c1a9e0b2d4c7f8a1e5d9b2c4f6a80","reference":"emp-1042","label":"Anna, reception","note":"x"},
+                  {"box":{"x1":0.2,"y1":0.2,"x2":0.4,"y2":0.4},"score":0.88,"collection":"wanted-persons","reference":"wanted:2024-12345","name":null}]},
+                {"image":"yard","faces":2,"matches":[]},
                 {"image":"a","faces":1},
-                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9}]},
-                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"reference":7}]},
-                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":"high","reference":"r"}]},
-                {"image":"a","faces":"2","matches":[]}]}}}
+                {"image":"a","matches":[]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"reference":"r"}]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":7,"reference":"r"}]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":"c"}]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":"c","reference":"r","name":5}]},
+                {"image":"a","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":"c","reference":"r","label":true}]}]}}}
             """;
         using var dn = Client(new StubHandler((_, _) => Ok(body)));
-        var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["wanted_person"].Results;
-        var gate = Assert.IsType<WantedPersonReading>(results[0]);
-        Assert.Equal(("gate", 2L), (gate.Image, gate.Faces));
-        Assert.Equal(new WantedMatch(new FaceBox(412, 188, 486, 274), 0.93, "wanted:2024-12345"), Assert.Single(gate.Matches));
-        Assert.Empty(Assert.IsType<WantedPersonReading>(results[1]).Matches);
+        var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["face_recognition"].Results;
+        var one = Assert.IsType<FaceRecognitionReading>(results[0]);
+        Assert.Equal(("a1b2", 3L, 3), (one.Image, one.Faces, one.Matches.Count));
+        Assert.Equal(new FaceMatch(new FaceBox(0.12, 0.3, 0.37, 0.7), 0.93, "celebrities", "Q12345", "Jane Example", null), one.Matches[0]);
+        Assert.Equal(new FaceMatch(new FaceBox(0.5, 0.1, 0.7, 0.35), 0.81, "col_3f6c1a9e0b2d4c7f8a1e5d9b2c4f6a80", "emp-1042", null, "Anna, reception"), one.Matches[1]);
+        Assert.Null(one.Matches[2].Name);
+        Assert.Empty(Assert.IsType<FaceRecognitionReading>(results[1]).Matches);
+        // No matches, no faces, a match without its collection or reference or with either not
+        // a string, and a name or label that is not a string: generic readings.
         Assert.All(results.Skip(2), r => Assert.IsType<UnknownReading>(r));
+    }
+
+    [Fact]
+    public async Task WantedPersonIsNoLongerABoosterThisLibraryKnows()
+    {
+        const string body = """
+            {"answers":{},"evidence":{"wanted_person":{"version":"wanted_person-v1","status":"ok","latency_ms":40,"billed_calls":1,"results":[
+              {"image":"gate","faces":2,"matches":[{"box":{"x1":412,"y1":188,"x2":486,"y2":274},"score":0.93,"reference":"wanted:2024-12345"}]}]}}}
+            """;
+        using var dn = Client(new StubHandler((_, _) => Ok(body)));
+        var reading = Assert.Single((await dn.DecideAsync("s", OneTruth())).Evidence!["wanted_person"].Results);
+        Assert.IsType<UnknownReading>(reading);
     }
 
     [Fact]

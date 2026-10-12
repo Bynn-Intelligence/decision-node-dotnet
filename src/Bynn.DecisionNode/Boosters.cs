@@ -41,8 +41,12 @@ public sealed class Booster
     /// <summary>The name <c>face_detection</c>. Its readings are <see cref="FaceDetectionReading"/>s.</summary>
     public const string FaceDetection = "face_detection";
 
-    /// <summary>The name <c>wanted_person</c>. Its readings are <see cref="WantedPersonReading"/>s.</summary>
-    public const string WantedPerson = "wanted_person";
+    /// <summary>
+    /// The name <c>face_recognition</c>: the faces of a picture matched against a collection
+    /// (<see cref="DecisionNodeClient.Collections"/>). Its options <c>collection</c> and
+    /// <c>threshold</c> are sent as given. Its readings are <see cref="FaceRecognitionReading"/>s.
+    /// </summary>
+    public const string FaceRecognition = "face_recognition";
 
     /// <summary>
     /// The name <c>ocr</c>. Its readings are <see cref="OcrReading"/>s. A request naming it has its
@@ -241,7 +245,7 @@ public sealed class Evidence
 /// <summary>
 /// One booster's reading of one image: an <see cref="AgeReading"/>, an
 /// <see cref="AiGeneratedReading"/>, an <see cref="OcrReading"/>, a <see cref="FaceDetectionReading"/>,
-/// a <see cref="WantedPersonReading"/> or, for a booster this version of the library does not know
+/// a <see cref="FaceRecognitionReading"/> or, for a booster this version of the library does not know
 /// or a reading with a missing or wrongly typed field, an <see cref="UnknownReading"/> holding
 /// its raw fields. A reading never fails the decision. Numbers are passed through as received.
 /// </summary>
@@ -277,7 +281,7 @@ public abstract class Reading
                 DecisionNode.Booster.AiGenerated => AiGeneratedReading.Read(raw),
                 DecisionNode.Booster.Ocr => OcrReading.Read(raw),
                 DecisionNode.Booster.FaceDetection => FaceDetectionReading.Read(raw),
-                DecisionNode.Booster.WantedPerson => WantedPersonReading.Read(raw),
+                DecisionNode.Booster.FaceRecognition => FaceRecognitionReading.Read(raw),
                 _ => new UnknownReading(booster, raw),
             };
         }
@@ -510,38 +514,43 @@ public sealed class FaceDetectionReading : Reading
 public sealed record FaceDetection(FaceBox Box, double Confidence);
 
 /// <summary>
-/// A reading of the <c>wanted_person</c> booster, its fields as received. <see cref="Faces"/>
-/// may exceed the list.
+/// A reading of the <c>face_recognition</c> booster, its fields as received: the faces
+/// searched and the matches found in the collection, by score. <see cref="Faces"/> may exceed
+/// the list.
 /// </summary>
-public sealed class WantedPersonReading : Reading
+public sealed class FaceRecognitionReading : Reading
 {
-    private WantedPersonReading(JsonObject raw, long faces, IReadOnlyList<WantedMatch> matches)
-        : base(DecisionNode.Booster.WantedPerson, raw)
+    private FaceRecognitionReading(JsonObject raw, long faces, IReadOnlyList<FaceMatch> matches)
+        : base(DecisionNode.Booster.FaceRecognition, raw)
     {
         Faces = faces;
         Matches = matches;
     }
 
-    /// <summary>The <c>faces</c> count, as received.</summary>
+    /// <summary>The <c>faces</c> searched, as received.</summary>
     public long Faces { get; }
 
-    /// <summary>The <c>matches</c>, in the order received.</summary>
-    public IReadOnlyList<WantedMatch> Matches { get; }
+    /// <summary>The <c>matches</c>, in the order received; empty when nothing matches.</summary>
+    public IReadOnlyList<FaceMatch> Matches { get; }
 
-    internal static WantedPersonReading Read(JsonObject raw)
+    internal static FaceRecognitionReading Read(JsonObject raw)
     {
         _ = Text(raw, "image");
         var faces = Count(raw, "faces");
-        var matches = List(raw, "matches", m => new WantedMatch(Box(m, "box"), Number(m, "score"), Text(m, "reference")));
-        return new WantedPersonReading(raw, faces, matches);
+        var matches = List(raw, "matches", m => new FaceMatch(
+            Box(m, "box"), Number(m, "score"), Text(m, "collection"), Text(m, "reference"), OptionalText(m, "name"), OptionalText(m, "label")));
+        return new FaceRecognitionReading(raw, faces, matches);
     }
 }
 
-/// <summary>One entry of a <see cref="WantedPersonReading"/>'s matches.</summary>
+/// <summary>One entry of a <see cref="FaceRecognitionReading"/>'s matches.</summary>
 /// <param name="Box">Its box.</param>
 /// <param name="Score">Its <c>score</c>, as received.</param>
-/// <param name="Reference">Its <c>reference</c>, as received.</param>
-public sealed record WantedMatch(FaceBox Box, double Score, string Reference);
+/// <param name="Collection">The collection searched, as received.</param>
+/// <param name="Reference">The matched item's <c>reference</c>, as received.</param>
+/// <param name="Name">The public figure's <c>name</c>, for a public collection's match; <c>null</c> when absent.</param>
+/// <param name="Label">The matched item's <c>label</c>, when it has one; <c>null</c> when absent.</param>
+public sealed record FaceMatch(FaceBox Box, double Score, string Collection, string Reference, string? Name, string? Label);
 
 /// <summary>
 /// A face's box: its top-left (<c>X1</c>, <c>Y1</c>) and bottom-right (<c>X2</c>, <c>Y2</c>)
