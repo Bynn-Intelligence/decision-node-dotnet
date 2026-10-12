@@ -1,0 +1,72 @@
+# Auto-release Bynn.DecisionNode on every push to main: bump the patch in the
+# csproj, run the tests, pack, push to NuGet, push the bump commit and tag back
+# to main, and cut the GitHub release. The push back uses the default
+# GITHUB_TOKEN, which does not retrigger this workflow, and the bump commit
+# carries [skip publish] as a second guard.
+#
+# Runs only while the repository is public: nothing is bumped, tagged or
+# published while it is private.
+#
+# To ship without cutting a release (docs, CI tweaks), put [skip publish] in
+# the commit message.
+#
+# The tests here are the unit tests; the conformance suite runs in ci.yml.
+#
+# Needs: the NUGET_API_KEY secret (an API key from nuget.org scoped to push
+# Bynn.DecisionNode).
+name: Publish to NuGet
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions: read-all
+
+jobs:
+  publish:
+    if: "github.event.repository.visibility == 'public' && !contains(github.event.head_commit.message, '[skip publish]')"
+    runs-on: ubuntu-latest
+    environment: nuget-publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          CSPROJ=src/Bynn.DecisionNode/Bynn.DecisionNode.csproj
+          CURRENT=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' "$CSPROJ")
+          NEW="${CURRENT%.*}.$(( ${CURRENT##*.} + 1 ))"
+          sed -i "s|<Version>${CURRENT}</Version>|<Version>${NEW}</Version>|" "$CSPROJ"
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+
+      - run: dotnet restore Bynn.DecisionNode.sln
+      - run: dotnet build --no-restore -c Release
+      - run: dotnet test --no-build -c Release tests/Bynn.DecisionNode.Tests
+
+      - run: |
+          git add src/Bynn.DecisionNode/Bynn.DecisionNode.csproj
+          git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
+
+      - run: dotnet pack --no-build -c Release src/Bynn.DecisionNode/Bynn.DecisionNode.csproj
+      - run: dotnet nuget push "src/Bynn.DecisionNode/bin/Release/Bynn.DecisionNode.${{ steps.bump.outputs.version }}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+
+      - run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
