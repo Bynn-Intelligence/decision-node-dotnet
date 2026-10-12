@@ -8,6 +8,7 @@ description), every file is on the allowlist, and no file names anything interna
 """
 
 import fnmatch
+import hashlib
 import io
 import re
 import sys
@@ -39,12 +40,37 @@ ALLOWED = {
     ],
 }
 
-# Nothing internal in any file of a package: names, hosts, documents, attribution.
+# Nothing internal in any file of a package: document paths, machine paths, attribution...
 FORBIDDEN = re.compile(
-    r"docs/[0-9]{2}|backend/[0-9]{2}|products/|/Users/"
-    r"|co-authored-by|generated with",
+    r"docs/[0-9]{2}|backend/[0-9]{2}|products/|/Users/|co-authored-by|generated with",
     re.IGNORECASE,
 )
+# ...and no internal name. The names are kept out of this public file as the SHA-256 digests of
+# the lowercase word: found anywhere inside a run of letters, or (WORDS) only as a whole run.
+INSIDE = {
+    "9e9b2efac0b62e4cf6f08cc6b7095e6ad7e18c447458c5849accb698f7149ef3",
+    "934a11e602682e862b4b4d1f881ae8da1e097e3f6964bd780e5bb1fb798a6fdd",
+    "b7933ed6180d9e2895a9d2df885e2a8b92e998a3c16297581f5b8698daacf492",
+    "31d1b3d540ecf85228db7797efbe7d198ec5406abd3f6e64f27f684e9a312d29",
+}
+INSIDE_LENGTHS = (6, 7)
+WORDS = {"2e0b8d61fa2a6959d254b6ff5d0fb512249329097336a35568089933b49abdde"}
+
+
+def digest(word: str) -> str:
+    return hashlib.sha256(word.encode()).hexdigest()
+
+
+def internal_name(text: str) -> str | None:
+    """The first internal name in the text, by its digest, or None."""
+    for run in set(re.findall(r"[a-z]+", text.lower())):
+        if digest(run) in WORDS:
+            return run
+        for length in INSIDE_LENGTHS:
+            for i in range(len(run) - length + 1):
+                if digest(run[i : i + length]) in INSIDE:
+                    return run
+    return None
 # Boosters the package page does not describe until the API serves them.
 UNLISTED = re.compile(r"face_detection|wanted_person", re.IGNORECASE)
 
@@ -79,6 +105,10 @@ def check_files(path: Path, kind: str) -> dict[str, bytes]:
             match = FORBIDDEN.search(text)
             if match:
                 fail(f"{path.name}: {name} contains {match.group(0)!r}")
+                break
+            found = internal_name(text)
+            if found:
+                fail(f"{path.name}: {name} contains an internal name (in {found!r})")
                 break
     return files
 
