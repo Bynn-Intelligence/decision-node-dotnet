@@ -16,13 +16,13 @@
     <Authors>Bynn Intelligence</Authors>
     <Company>Bynn Intelligence, Inc.</Company>
     <Copyright>Copyright (c) Bynn Intelligence, Inc.</Copyright>
-    <Description>The official .NET client for the DecisionNode API: ask yes-or-no, choice, score and number questions about any state and get calibrated probabilities back, one at a time, in sessions or in batches.</Description>
+    <Description>The official .NET client for the DecisionNode decision engine API: ask yes-or-no, choice, score and number questions about any state and get calibrated probabilities back, one at a time, in sessions or in batches.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://decisionnode.com</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Bynn-Intelligence/decision-node-dotnet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>decisionnode;decisions;classification;api;sdk;websocket;batch</PackageTags>
+    <PackageTags>decisionnode;decision-engine;decisions;classification;api;sdk;websocket;batch</PackageTags>
     <!-- A symbols package (.snupkg) beside the .nupkg, for source-level debugging. -->
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

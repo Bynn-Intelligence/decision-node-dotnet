@@ -1,5 +1,7 @@
 # DecisionNode for .NET
 
+[DecisionNode](https://decisionnode.com) is a decision engine: send it text, JSON or images with a question, and it answers with calibrated probabilities.
+
 The official .NET client for the DecisionNode API: ask yes-or-no, choice, score and number questions about any state, and get calibrated probabilities back. One request at a time, many in parallel, a live stream of readings in a session, or a batch at half the price.
 
 ## Install
