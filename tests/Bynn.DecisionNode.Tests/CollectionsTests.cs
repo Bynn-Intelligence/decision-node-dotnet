@@ -96,6 +96,23 @@ public class CollectionsTests
         var name = new string('n', 81);
         var tooLong = await Refused(dn => dn.Collections.CreateAsync(name));
         Assert.Equal(("string_too_long", 80), ((string?)tooLong["type"], (int)tooLong["ctx"]!["max_length"]!));
+        // The input is echoed within bounds: its first 64 characters and "...".
+        Assert.Equal(new string('n', 64) + "...", (string?)tooLong["input"]);
+        var longType = await Refused(dn => dn.Collections.CreateAsync("Staff", new string('t', 70)));
+        Assert.Equal(new string('t', 64) + "...", (string?)longType["input"]);
+    }
+
+    [Fact]
+    public async Task AnEchoedInputIsCutInCodePoints()
+    {
+        // 81 characters outside the Basic Multilingual Plane: 64 of them and "...", never a
+        // surrogate cut in half.
+        var wide = string.Concat(Enumerable.Repeat("\U00020000", 81));
+        var entry = await Refused(dn => dn.Collections.CreateAsync(wide));
+        Assert.Equal(string.Concat(Enumerable.Repeat("\U00020000", 64)) + "...", (string?)entry["input"]);
+        // Exactly 64 characters are echoed whole.
+        var exact = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp 1042" + new string('x', 56)));
+        Assert.Equal("emp 1042" + new string('x', 56), (string?)exact["input"]);
     }
 
     [Fact]
@@ -112,17 +129,25 @@ public class CollectionsTests
     [Fact]
     public async Task EnrollChecksTheReferenceTheLabelAndTheImageUrlLocally()
     {
-        // The length first, then the pattern, which an empty reference fails too.
+        // The length (1 to 64) first, then the pattern.
         var empty = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, ""));
-        Assert.Equal(("string_pattern_mismatch", """["body","reference"]"""), ((string?)empty["type"], empty["loc"]!.ToJsonString()));
+        Same("""{"type":"string_too_short","loc":["body","reference"],"msg":"String should have at least 1 character","input":"","ctx":{"min_length":1}}""", empty);
         var tooLong = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, new string('r', 65)));
         Assert.Equal(("string_too_long", 64), ((string?)tooLong["type"], (int)tooLong["ctx"]!["max_length"]!));
+        Assert.Equal(new string('r', 64) + "...", (string?)tooLong["input"]);
         var pattern = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp 1042"));
         Same("""{"type":"string_pattern_mismatch","loc":["body","reference"],"msg":"String should match pattern '^[A-Za-z0-9_.:-]{1,64}$'","input":"emp 1042","ctx":{"pattern":"^[A-Za-z0-9_.:-]{1,64}$"}}""", pattern);
         var newline = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp-1042\n"));
         Assert.Equal("string_pattern_mismatch", (string?)newline["type"]);
         var label = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp-1042", new string('l', 129)));
         Assert.Equal(("string_too_long", """["body","label"]"""), ((string?)label["type"], label["loc"]!.ToJsonString()));
+        Assert.Equal(new string('l', 64) + "...", (string?)label["input"]);
+        // A label given but empty is too short; left out, it is not checked.
+        var emptyLabel = await Refused(dn => dn.Collections.EnrollAsync(Id, Badge, "emp-1042", ""));
+        Same("""{"type":"string_too_short","loc":["body","label"],"msg":"String should have at least 1 character","input":"","ctx":{"min_length":1}}""", emptyLabel);
+        // A missing image's input is null.
+        var noImage = await Refused(dn => dn.Collections.EnrollAsync(Id, null!, "emp-1042"));
+        Same("""{"type":"missing","loc":["body","image"],"msg":"Field required","input":null}""", noImage);
 
         // Only a URL's rules are checked locally: a URL that is not https is refused, while a
         // picture the server cannot read is the server's 422 to answer.

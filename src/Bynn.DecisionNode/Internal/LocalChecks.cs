@@ -1011,9 +1011,9 @@ internal static class LocalChecks
         var entries = new List<JsonNode?>();
         if (type != "face")
         {
-            entries.Add(Entry("literal_error", new JsonArray("body", "type"), "Input should be 'face'", type is null ? null : JsonValue.Create(type), new JsonObject { ["expected"] = "'face'" }));
+            entries.Add(Entry("literal_error", new JsonArray("body", "type"), "Input should be 'face'", Echoed(type), new JsonObject { ["expected"] = "'face'" }));
         }
-        entries.AddRange(StringEntries(new JsonArray("body", "name"), name, 1, MaxCollectionName, null));
+        entries.AddRange(StringEntries(new JsonArray("body", "name"), name, MaxCollectionName, null));
         if (entries.Count > 0)
         {
             throw Unprocessable(entries);
@@ -1021,27 +1021,21 @@ internal static class LocalChecks
     }
 
     /// <summary>
-    /// An enrollment: the image present, a reference of at most 64 characters, then of the
-    /// pattern (an empty reference fails it), and a label of at most 128.
+    /// An enrollment: the image present, a reference of 1 to 64 characters, then of the
+    /// pattern, and a label, when given, of 1 to 128.
     /// </summary>
     internal static void CollectionEnroll(Image? image, string? reference, string? label)
     {
         var entries = new List<JsonNode?>();
         if (image is null)
         {
-            entries.Add(Entry("missing", new JsonArray("body", "image"), "Field required", new JsonObject { ["reference"] = reference }));
+            entries.Add(Entry("missing", new JsonArray("body", "image"), "Field required", null));
         }
-        if (reference is null)
-        {
-            entries.Add(Entry("missing", new JsonArray("body", "reference"), "Field required", null));
-        }
-        else
-        {
-            entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, 0, MaxItemReference, ItemReferencePattern));
-        }
+        entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, MaxItemReference, ItemReferencePattern));
         if (label is not null)
         {
-            entries.AddRange(StringEntries(new JsonArray("body", "label"), label, 0, MaxItemLabel, null));
+            // Its pattern (no control or invisible character) is the server's to judge.
+            entries.AddRange(StringEntries(new JsonArray("body", "label"), label, MaxItemLabel, null));
         }
         if (entries.Count > 0)
         {
@@ -1049,25 +1043,41 @@ internal static class LocalChecks
         }
     }
 
-    /// <summary>A string field's <c>422</c> entry: missing, too short, too long, or not of the pattern; its length in code points.</summary>
-    private static IEnumerable<JsonNode?> StringEntries(JsonArray loc, string? value, int least, int most, string? pattern)
+    /// <summary>The longest string a collections <c>422</c> entry echoes, in characters, before <c>...</c>.</summary>
+    private const int EchoChars = 64;
+
+    /// <summary>
+    /// An input as a collections <c>422</c> entry echoes it, as the API does: a string cut to
+    /// its first 64 characters (code points) with <c>...</c> added when it was longer.
+    /// </summary>
+    private static JsonNode? Echoed(string? value)
     {
         if (value is null)
         {
-            if (least > 0)
-            {
-                yield return Entry("missing", loc, "Field required", null);
-            }
+            return null;
+        }
+        var runes = value.EnumerateRunes().ToList();
+        return runes.Count <= EchoChars ? value : string.Concat(runes.Take(EchoChars).Select(r => r.ToString())) + "...";
+    }
+
+    /// <summary>
+    /// A collections string field's <c>422</c> entry: missing, empty, too long (in code points),
+    /// or not of the pattern; its input echoed within bounds.
+    /// </summary>
+    private static IEnumerable<JsonNode?> StringEntries(JsonArray loc, string? value, int most, string? pattern)
+    {
+        if (value is null)
+        {
+            yield return Entry("missing", loc, "Field required", null);
             yield break;
         }
-        var length = value.EnumerateRunes().Count();
-        if (length < least)
+        if (value.Length == 0)
         {
-            yield return Entry("string_too_short", loc, $"String should have at least {least} character{(least == 1 ? string.Empty : "s")}", value, new JsonObject { ["min_length"] = least });
+            yield return Entry("string_too_short", loc, "String should have at least 1 character", value, new JsonObject { ["min_length"] = 1 });
         }
-        else if (length > most)
+        else if (value.EnumerateRunes().Count() > most)
         {
-            yield return Entry("string_too_long", loc, $"String should have at most {most} characters", value, new JsonObject { ["max_length"] = most });
+            yield return Entry("string_too_long", loc, $"String should have at most {most} characters", Echoed(value), new JsonObject { ["max_length"] = most });
         }
         else if (pattern is not null && !ItemReference.IsMatch(value))
         {
