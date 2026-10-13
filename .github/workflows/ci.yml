@@ -57,3 +57,15 @@ jobs:
 
       - name: Pack (checked, not published)
         run: dotnet pack src/Bynn.DecisionNode --no-build --configuration Release --output artifacts
+
+  # The check that runs before every release, tested with invented words; it
+  # needs no secret.
+  name-check:
+    name: Release name check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Test the release name check
+        run: python3 .github/scripts/test_check_names.py
