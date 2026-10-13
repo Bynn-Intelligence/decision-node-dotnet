@@ -810,6 +810,7 @@ public static class Driver
             ["kind"] = "face_recognition",
             ["image"] = w.Image,
             ["faces"] = w.Faces,
+            ["collection_name"] = w.CollectionName,
             ["matches"] = new JsonArray(w.Matches.Select(m => (JsonNode)new JsonObject
             {
                 ["box"] = Box(m.Box),
@@ -818,6 +819,8 @@ public static class Driver
                 ["reference"] = m.Reference,
                 ["name"] = m.Name,
                 ["label"] = m.Label,
+                ["collection_name"] = m.CollectionName,
+                ["metadata"] = m.Metadata?.DeepClone(),
             }).ToArray()),
         },
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },

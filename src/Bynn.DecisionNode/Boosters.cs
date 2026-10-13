@@ -520,12 +520,16 @@ public sealed record FaceDetection(FaceBox Box, double Confidence);
 /// </summary>
 public sealed class FaceRecognitionReading : Reading
 {
-    private FaceRecognitionReading(JsonObject raw, long faces, IReadOnlyList<FaceMatch> matches)
+    private FaceRecognitionReading(JsonObject raw, long faces, string? collectionName, IReadOnlyList<FaceMatch> matches)
         : base(DecisionNode.Booster.FaceRecognition, raw)
     {
         Faces = faces;
+        CollectionName = collectionName;
         Matches = matches;
     }
+
+    /// <summary>The collection's name, as received (an own collection's display name or its id, a public collection's id); <c>null</c> when absent.</summary>
+    public string? CollectionName { get; }
 
     /// <summary>The <c>faces</c> searched, as received.</summary>
     public long Faces { get; }
@@ -537,9 +541,17 @@ public sealed class FaceRecognitionReading : Reading
     {
         _ = Text(raw, "image");
         var faces = Count(raw, "faces");
+        var collectionName = OptionalText(raw, "collection_name");
         var matches = List(raw, "matches", m => new FaceMatch(
-            Box(m, "box"), Number(m, "score"), Text(m, "collection"), Text(m, "reference"), OptionalText(m, "name"), OptionalText(m, "label")));
-        return new FaceRecognitionReading(raw, faces, matches);
+            Box(m, "box"), Number(m, "score"), Text(m, "collection"), Text(m, "reference"), OptionalText(m, "name"), OptionalText(m, "label"),
+            OptionalText(m, "collection_name"),
+            m["metadata"] switch
+            {
+                null => null,
+                JsonObject o => o,
+                _ => throw new MalformedReading(),
+            }));
+        return new FaceRecognitionReading(raw, faces, collectionName, matches);
     }
 }
 
@@ -550,7 +562,18 @@ public sealed class FaceRecognitionReading : Reading
 /// <param name="Reference">The matched item's <c>reference</c>, as received.</param>
 /// <param name="Name">The public figure's <c>name</c>, for a public collection's match; <c>null</c> when absent.</param>
 /// <param name="Label">The matched item's <c>label</c>, when it has one; <c>null</c> when absent.</param>
-public sealed record FaceMatch(FaceBox Box, double Score, string Collection, string Reference, string? Name, string? Label);
+/// <param name="CollectionName">The collection's name, as received; <c>null</c> when absent.</param>
+/// <param name="Metadata">The matched item's metadata, the object as received, when it has any; <c>null</c> when absent.</param>
+public sealed record FaceMatch(FaceBox Box, double Score, string Collection, string Reference, string? Name, string? Label, string? CollectionName = null, JsonObject? Metadata = null)
+{
+    /// <summary>Two matches are equal when their fields are, the metadata compared by its JSON value.</summary>
+    public bool Equals(FaceMatch? other) =>
+        other is not null && Box == other.Box && Score == other.Score && Collection == other.Collection && Reference == other.Reference
+        && Name == other.Name && Label == other.Label && CollectionName == other.CollectionName && JsonNode.DeepEquals(Metadata, other.Metadata);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Box, Score, Collection, Reference, Name, Label, CollectionName);
+}
 
 /// <summary>
 /// A face's box: its top-left (<c>X1</c>, <c>Y1</c>) and bottom-right (<c>X2</c>, <c>Y2</c>)

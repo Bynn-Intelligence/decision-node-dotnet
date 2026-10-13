@@ -425,6 +425,37 @@ public class SpecOneThreeTests
     }
 
     [Fact]
+    public async Task FaceRecognitionReadingsNameTheirCollectionAndCarryMetadata()
+    {
+        const string body = """
+            {"answers":{},"evidence":{
+              "face_recognition":{"version":"face_recognition-v1","status":"ok","latency_ms":40,"billed_calls":4,"results":[
+                {"image":"a","faces":1,"collection_name":"Staff, Stockholm office","matches":[
+                  {"box":{"x1":0.1,"y1":0.2,"x2":0.3,"y2":0.4},"score":0.81,"collection":"col_3f6c1a9e0b2d4c7f8a1e5d9b2c4f6a80","reference":"emp-1042","label":"Anna","collection_name":"Staff, Stockholm office","metadata":{"department":"reception","floor":3}}]},
+                {"image":"b","faces":1,"matches":[{"box":{"x1":0.1,"y1":0.2,"x2":0.3,"y2":0.4},"score":0.9,"collection":"celebrities","reference":"Q1"}]},
+                {"image":"c","faces":1,"collection_name":7,"matches":[]},
+                {"image":"d","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":"c","reference":"r","collection_name":true}]},
+                {"image":"e","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":"c","reference":"r","metadata":["x"]}]},
+                {"image":"f","faces":1,"matches":[{"box":{"x1":1,"y1":1,"x2":2,"y2":3},"score":0.9,"collection":"c","reference":"r","metadata":"x"}]}]}}}
+            """;
+        using var dn = Client(new StubHandler((_, _) => Ok(body)));
+        var results = (await dn.DecideAsync("s", OneTruth())).Evidence!["face_recognition"].Results;
+        var own = Assert.IsType<FaceRecognitionReading>(results[0]);
+        Assert.Equal("Staff, Stockholm office", own.CollectionName);
+        var match = Assert.Single(own.Matches);
+        Assert.Equal("Staff, Stockholm office", match.CollectionName);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"department":"reception","floor":3}"""), match.Metadata));
+        Assert.Equal(new FaceMatch(new FaceBox(0.1, 0.2, 0.3, 0.4), 0.81, "col_3f6c1a9e0b2d4c7f8a1e5d9b2c4f6a80", "emp-1042", null, "Anna", "Staff, Stockholm office", (JsonObject)JsonNode.Parse("""{"department":"reception","floor":3}""")!), match);
+        // Absent, both are null, never an empty map.
+        var plain = Assert.IsType<FaceRecognitionReading>(results[1]);
+        Assert.Null(plain.CollectionName);
+        Assert.Null(plain.Matches[0].CollectionName);
+        Assert.Null(plain.Matches[0].Metadata);
+        // A collection_name that is not a string, or metadata that is not an object: generic.
+        Assert.All(results.Skip(2), r => Assert.IsType<UnknownReading>(r));
+    }
+
+    [Fact]
     public async Task WantedPersonIsNoLongerABoosterThisLibraryKnows()
     {
         const string body = """
