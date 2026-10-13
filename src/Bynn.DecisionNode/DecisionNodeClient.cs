@@ -944,6 +944,11 @@ public sealed partial class DecisionNodeClient : IDisposable
                 ? result.Status is 429 or 529
                 : (IsRetryable(result.Status) && error is not SessionLimitError)
                     || (policy == RetryPolicy.Idempotent && result.Status == 409 && error.ErrorType == "idempotency_in_progress");
+            if (result.Status == 529 && JsonValues.AsString(error.Details?["reason"]) == "enrollment_unpriced")
+            {
+                // No price for an enrollment on this deployment: a retry never cures it.
+                retryable = false;
+            }
             if (retryable && attempt < MaxRetries)
             {
                 await Delay(RetryWait(result.Header) ?? Backoff(attempt), ct).ConfigureAwait(false);
@@ -1212,12 +1217,14 @@ public sealed partial class DecisionNodeClient : IDisposable
         var detail = (body as JsonObject)?["detail"];
         string? errorType = null, message = null, category = null;
         JsonArray? entries = null;
+        JsonObject? more = null;
         switch (detail)
         {
             case JsonObject d:
                 errorType = JsonValues.AsString(d["error_type"]);
                 message = JsonValues.AsString(d["message"]) ?? string.Empty;
                 category = JsonValues.AsString(d["category"]);
+                more = d["details"] as JsonObject;
                 break;
             case JsonArray list:
                 entries = list;
@@ -1235,6 +1242,7 @@ public sealed partial class DecisionNodeClient : IDisposable
             Reason = header("x-decisionnode-error"),
             Body = body,
             Boosters = BoosterStatus.ParseHeader(header("x-decisionnode-boosters")),
+            Details = more,
         };
         return status switch
         {

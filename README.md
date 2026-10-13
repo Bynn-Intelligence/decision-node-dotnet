@@ -423,7 +423,7 @@ using var dn = new DecisionNodeClient(headers: new Dictionary<string, string>
 
 ## Errors
 
-Every error derives from `DecisionNodeError` (catch that name to catch them all), which carries `Status`, `ErrorType`, `RequestId`, `Boosters` (see Boosters) and `Reason`: the server's explanation in words from the `x-decisionnode-error` header, for example "question 'q': a score takes up to 10 levels, got 11". The exception's own `Message` is the server's message exactly (`detail.message`, or `detail` when it is a string; empty when the server sent neither), or the library's description when no response arrived.
+Every error derives from `DecisionNodeError` (catch that name to catch them all), which carries `Status`, `ErrorType`, `RequestId`, `Boosters` (see Boosters), `Details` (the server's `detail.details` object when it sends one, else `null`) and `Reason`: the server's explanation in words from the `x-decisionnode-error` header, for example "question 'q': a score takes up to 10 levels, got 11". The exception's own `Message` is the server's message exactly (`detail.message`, or `detail` when it is a string; empty when the server sent neither), or the library's description when no response arrived.
 
 | Status | Error | Extra |
 |---|---|---|

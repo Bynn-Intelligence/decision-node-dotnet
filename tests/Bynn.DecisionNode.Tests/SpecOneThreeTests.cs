@@ -401,7 +401,7 @@ public class SpecOneThreeTests
                 {"image":"a1b2","faces":3,"matches":[
                   {"box":{"x1":0.12,"y1":0.3,"x2":0.37,"y2":0.7},"score":0.93,"collection":"celebrities","reference":"Q12345","name":"Jane Example"},
                   {"box":{"x1":0.5,"y1":0.1,"x2":0.7,"y2":0.35},"score":0.81,"collection":"col_3f6c1a9e0b2d4c7f8a1e5d9b2c4f6a80","reference":"emp-1042","label":"Anna, reception","note":"x"},
-                  {"box":{"x1":0.2,"y1":0.2,"x2":0.4,"y2":0.4},"score":0.88,"collection":"wanted-persons","reference":"wanted:2024-12345","name":null}]},
+                  {"box":{"x1":0.2,"y1":0.2,"x2":0.4,"y2":0.4},"score":0.88,"collection":"celebrities","reference":"Q67890","name":null}]},
                 {"image":"yard","faces":2,"matches":[]},
                 {"image":"a","faces":1},
                 {"image":"a","matches":[]},

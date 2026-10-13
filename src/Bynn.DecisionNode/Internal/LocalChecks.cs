@@ -1024,7 +1024,7 @@ internal static class LocalChecks
     /// An enrollment: the image present, a reference of 1 to 64 characters, then of the
     /// pattern, and a label, when given, of 1 to 128.
     /// </summary>
-    internal static void CollectionEnroll(Image? image, string? reference, string? label)
+    internal static void CollectionEnroll(Image? image, string? reference, string? label, JsonObject? metadata = null)
     {
         var entries = new List<JsonNode?>();
         if (image is null)
@@ -1037,10 +1037,122 @@ internal static class LocalChecks
             // Its pattern (no control or invisible character) is the server's to judge.
             entries.AddRange(StringEntries(new JsonArray("body", "label"), label, MaxItemLabel, null));
         }
+        if (metadata is not null)
+        {
+            entries.AddRange(MetadataEntries(metadata));
+        }
         if (entries.Count > 0)
         {
             throw Unprocessable(entries);
         }
+    }
+
+    /// <summary>An item update with nothing to change.</summary>
+    internal static void CollectionUpdate(string? reference, bool labelGiven, string? label, JsonObject? metadata)
+    {
+        var entries = new List<JsonNode?>();
+        if (reference is not null)
+        {
+            entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, MaxItemReference, ItemReferencePattern));
+        }
+        if (labelGiven && label is not null)
+        {
+            entries.AddRange(StringEntries(new JsonArray("body", "label"), label, MaxItemLabel, null));
+        }
+        if (metadata is not null)
+        {
+            entries.AddRange(MetadataEntries(metadata));
+        }
+        if (reference is null && !labelGiven && metadata is null)
+        {
+            entries.Add(Entry("missing", new JsonArray("body"), "Send reference, label, metadata or any of them", null));
+        }
+        if (entries.Count > 0)
+        {
+            throw Unprocessable(entries);
+        }
+    }
+
+    /// <summary>The most keys an item's metadata holds, the longest key and the longest text, in characters.</summary>
+    internal const int MaxMetadataKeys = 20, MaxMetadataKeyChars = 40, MaxMetadataTextChars = 500;
+
+    private static readonly System.Text.RegularExpressions.Regex MetadataKey = new(@"\A[a-z0-9_]{1,40}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// An item's metadata's <c>422</c> entries, the limits a client may hold: an object of at
+    /// most 20 keys (that alone, before any key is read), each key 1 to 40 of a-z, 0-9 and _,
+    /// each value a text of at most 500 characters, a number or a boolean. A text's control or
+    /// invisible characters, a number's range and the 4 KB total are the server's.
+    /// </summary>
+    internal static IEnumerable<JsonNode?> MetadataEntries(JsonNode? metadata)
+    {
+        var loc = new JsonArray("body", "metadata");
+        if (metadata is not JsonObject map)
+        {
+            return new[] { Entry("value_error", loc, "Metadata is an object of keys and values.", EchoedNode(metadata)) };
+        }
+        if (map.Count > MaxMetadataKeys)
+        {
+            return new[] { Entry("value_error", loc, $"Metadata holds at most {MaxMetadataKeys} keys.", null) };
+        }
+        var entries = new List<JsonNode?>();
+        foreach (var (key, value) in map)
+        {
+            if (!MetadataKey.IsMatch(key))
+            {
+                var runes = key.EnumerateRunes().ToList();
+                var shown = string.Concat(runes.Take(MaxMetadataKeyChars).Select(r => System.Text.Rune.GetUnicodeCategory(r) == UnicodeCategory.Control ? "?" : r.ToString()))
+                    + (runes.Count > MaxMetadataKeyChars ? "..." : string.Empty);
+                entries.Add(Entry("value_error", loc, $"A metadata key is 1 to {MaxMetadataKeyChars} characters of a-z, 0-9 and _: \"{shown}\".", null));
+            }
+            else if (value is JsonValue v && v.GetValueKind() == JsonValueKind.String)
+            {
+                if (v.GetValue<string>().EnumerateRunes().Count() > MaxMetadataTextChars)
+                {
+                    entries.Add(Entry("value_error", Loc(loc, key), $"A metadata text is at most {MaxMetadataTextChars} characters.", Echoed(v.GetValue<string>())));
+                }
+            }
+            else if (value is not JsonValue { } scalar || scalar.GetValueKind() is not (JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False))
+            {
+                entries.Add(Entry("value_error", Loc(loc, key), "A metadata value is a text, a number or true or false.", EchoedNode(value)));
+            }
+        }
+        return entries;
+    }
+
+    /// <summary>A value as a collections <c>422</c> entry echoes it: a string cut, an object or an array never.</summary>
+    private static JsonNode? EchoedNode(JsonNode? value) => value switch
+    {
+        JsonObject or JsonArray => null,
+        JsonValue v when v.GetValueKind() == JsonValueKind.String => Echoed(v.GetValue<string>()),
+        _ => value?.DeepClone(),
+    };
+
+    /// <summary>
+    /// The items list's filters: not both, and each 1 to 64 of the reference's characters, the
+    /// value shown as the API's message shows it.
+    /// </summary>
+    internal static void ItemFilters(string? reference, string? referencePrefix)
+    {
+        if (reference is not null && referencePrefix is not null)
+        {
+            throw BadRequest("Send query parameter reference or reference_prefix, not both.", "api_usage_error", null);
+        }
+        foreach (var (name, value) in new[] { ("reference", reference), ("reference_prefix", referencePrefix) })
+        {
+            if (value is not null && !ItemReference.IsMatch(value))
+            {
+                throw BadRequest($"Query parameter {name} must be 1 to 64 characters of A-Z, a-z, 0-9, _, ., : and -, got {Printable(value, MaxItemReference)}.", "api_usage_error", null);
+            }
+        }
+    }
+
+    /// <summary>A caller's value as an API message echoes it: its first characters, any but printable ASCII as <c>\u{hex}</c>, then <c>...</c> when it was longer.</summary>
+    private static string Printable(string value, int most)
+    {
+        var runes = value.EnumerateRunes().ToList();
+        var shown = string.Concat(runes.Take(most).Select(r => r.Value is >= 0x20 and <= 0x7E ? r.ToString() : $"\\u{{{r.Value:x}}}"));
+        return shown + (runes.Count > most ? "..." : string.Empty);
     }
 
     /// <summary>The longest string a collections <c>422</c> entry echoes, in characters, before <c>...</c>.</summary>

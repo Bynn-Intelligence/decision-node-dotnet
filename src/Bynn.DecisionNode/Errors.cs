@@ -33,6 +33,7 @@ public class DecisionNodeError : Exception
         Reason = details.Reason;
         Body = details.Body;
         Boosters = details.Boosters ?? BoosterStatus.ParseHeader(null);
+        Details = details.Details;
     }
 
     /// <summary>The HTTP status, or <c>null</c> when no response arrived.</summary>
@@ -59,6 +60,12 @@ public class DecisionNodeError : Exception
     /// see which required booster failed. Empty when the header is absent or no response arrived.
     /// </summary>
     public IReadOnlyDictionary<string, BoosterStatus> Boosters { get; } = BoosterStatus.ParseHeader(null);
+
+    /// <summary>
+    /// The server's <c>detail.details</c>, more about the error, for example
+    /// <c>{"reason": "enrollment_unpriced"}</c>; <c>null</c> when the body has none.
+    /// </summary>
+    public JsonObject? Details { get; }
 }
 
 /// <summary>400: the request is not valid for this model.</summary>
@@ -206,5 +213,6 @@ internal sealed record ErrorDetails
     public string? Reason { get; init; }
     public JsonNode? Body { get; init; }
     public IReadOnlyDictionary<string, BoosterStatus>? Boosters { get; init; }
+    public JsonObject? Details { get; init; }
     public Exception? Inner { get; init; }
 }

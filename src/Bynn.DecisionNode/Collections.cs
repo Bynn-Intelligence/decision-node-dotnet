@@ -65,12 +65,13 @@ public sealed class CollectionsClient
     /// <param name="image">The picture of the face.</param>
     /// <param name="reference">Your own id for the person, 1 to 64 of <c>A-Z a-z 0-9 _ . : -</c>.</param>
     /// <param name="label">An optional label of at most 128 characters; left out when <c>null</c>.</param>
+    /// <param name="metadata">An optional object of up to 20 keys (1 to 40 of a-z, 0-9 and _), each a text of at most 500 characters, a number or a boolean; left out when <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the call.</param>
     /// <exception cref="ValidationError">A reference or label out of its bounds; nothing is sent.</exception>
     /// <exception cref="BadRequestError">The image's URL breaks the API's URL rules (<c>image_url_refused</c>); nothing is sent.</exception>
-    public async Task<JsonObject> EnrollAsync(string collectionId, Image image, string reference, string? label = null, CancellationToken cancellationToken = default)
+    public async Task<JsonObject> EnrollAsync(string collectionId, Image image, string reference, string? label = null, JsonObject? metadata = null, CancellationToken cancellationToken = default)
     {
-        LocalChecks.CollectionEnroll(image, reference, label);
+        LocalChecks.CollectionEnroll(image, reference, label, metadata);
         // Only a URL's rules are checked here; every other fault of the picture is the
         // server's 422 image_unreadable.
         if (image.Url is { } url)
@@ -84,14 +85,23 @@ public sealed class CollectionsClient
         {
             body["label"] = label;
         }
+        if (metadata is not null)
+        {
+            body["metadata"] = metadata.DeepClone();
+        }
         return await ObjectAsync(HttpMethod.Post, Path(collectionId) + "/items", body, DecisionNodeClient.RetryPolicy.Idempotent, cancellationToken, NewKey()).ConfigureAwait(false);
     }
 
-    /// <summary>A page of a collection's items (<c>GET /v1/collections/{id}/items</c>); <paramref name="offset"/> and <paramref name="limit"/> sent only when given.</summary>
-    /// <exception cref="BadRequestError">An offset below 0 or a limit outside 1 to 100; nothing is sent.</exception>
-    public Task<JsonObject> ListItemsAsync(string collectionId, int? offset = null, int? limit = null, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// A page of a collection's items (<c>GET /v1/collections/{id}/items</c>), returned as sent;
+    /// each argument sent only when given. <paramref name="reference"/> finds the items of one
+    /// reference and <paramref name="referencePrefix"/> those whose reference starts with it.
+    /// </summary>
+    /// <exception cref="BadRequestError">An offset below 0, a limit outside 1 to 100, both filters, or a filter not 1 to 64 of <c>A-Z a-z 0-9 _ . : -</c>; nothing is sent.</exception>
+    public Task<JsonObject> ListItemsAsync(string collectionId, int? offset = null, int? limit = null, string? reference = null, string? referencePrefix = null, CancellationToken cancellationToken = default)
     {
         LocalChecks.ListPage(offset, limit);
+        LocalChecks.ItemFilters(reference, referencePrefix);
         var query = new List<string>();
         if (offset is { } o)
         {
@@ -101,8 +111,48 @@ public sealed class CollectionsClient
         {
             query.Add("limit=" + l.ToString(CultureInfo.InvariantCulture));
         }
+        if (reference is not null)
+        {
+            query.Add("reference=" + Uri.EscapeDataString(reference));
+        }
+        if (referencePrefix is not null)
+        {
+            query.Add("reference_prefix=" + Uri.EscapeDataString(referencePrefix));
+        }
         var path = Path(collectionId) + "/items" + (query.Count > 0 ? "?" + string.Join("&", query) : string.Empty);
         return ObjectAsync(HttpMethod.Get, path, null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);
+    }
+
+    /// <summary>
+    /// Changes an item (<c>PATCH /v1/collections/{id}/items/{itemId}</c>), sending only the fields
+    /// <paramref name="update"/> gives, and returns the item as sent. It carries an
+    /// <c>Idempotency-Key</c> and retries as <see cref="EnrollAsync"/> does.
+    /// </summary>
+    /// <exception cref="ValidationError">Nothing to change, or a reference, label or metadata out of its bounds; nothing is sent.</exception>
+    public async Task<JsonObject> UpdateItemAsync(string collectionId, string itemId, CollectionItemUpdate update, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        if (update.Label is not null && update.ClearLabel)
+        {
+            throw new ArgumentException("give Label or ClearLabel, not both", nameof(update));
+        }
+        var labelGiven = update.Label is not null || update.ClearLabel;
+        LocalChecks.CollectionUpdate(update.Reference, labelGiven, update.Label, update.Metadata);
+        var body = new JsonObject();
+        if (update.Reference is not null)
+        {
+            body["reference"] = update.Reference;
+        }
+        if (labelGiven)
+        {
+            body["label"] = update.Label;
+        }
+        if (update.Metadata is not null)
+        {
+            body["metadata"] = update.Metadata.DeepClone();
+        }
+        var path = Path(collectionId) + "/items/" + Uri.EscapeDataString(itemId);
+        return await ObjectAsync(HttpMethod.Patch, path, body, DecisionNodeClient.RetryPolicy.Idempotent, cancellationToken, NewKey()).ConfigureAwait(false);
     }
 
     /// <summary>Deletes one item (<c>DELETE /v1/collections/{id}/items/{itemId}</c>).</summary>
@@ -136,4 +186,22 @@ public sealed class CollectionsClient
             Body = parsed,
         });
     }
+}
+
+/// <summary>
+/// What <see cref="CollectionsClient.UpdateItemAsync"/> changes; a field left <c>null</c> is not sent.
+/// </summary>
+public sealed class CollectionItemUpdate
+{
+    /// <summary>A new reference, 1 to 64 of <c>A-Z a-z 0-9 _ . : -</c>.</summary>
+    public string? Reference { get; init; }
+
+    /// <summary>A new label of 1 to 128 characters. To remove the label, set <see cref="ClearLabel"/> instead.</summary>
+    public string? Label { get; init; }
+
+    /// <summary>Removes the item's label (sent as <c>"label": null</c>).</summary>
+    public bool ClearLabel { get; init; }
+
+    /// <summary>The item's whole new metadata, replacing the old; an empty object removes it all.</summary>
+    public JsonObject? Metadata { get; init; }
 }

@@ -177,11 +177,24 @@ public static class Driver
                 Text("collection_id")!,
                 args["image"] is JsonObject image ? ImageOf(image, ctx) : null!,
                 Text("reference")!,
-                Text("label"))),
+                Text("label"),
+                args["metadata"] is JsonObject md ? (JsonObject)Plain(md, ctx)! : null)),
+            "collections.update_item" => Wrap(client.Collections.UpdateItemAsync(
+                Text("collection_id")!,
+                Text("item_id")!,
+                new CollectionItemUpdate
+                {
+                    Reference = Text("reference"),
+                    Label = Text("label"),
+                    ClearLabel = args.ContainsKey("label") && args["label"] is null,
+                    Metadata = args["metadata"] is JsonObject um ? (JsonObject)Plain(um, ctx)! : null,
+                })),
             "collections.list_items" => Wrap(client.Collections.ListItemsAsync(
                 Text("collection_id")!,
                 args["offset"] is { } io ? (int)io : null,
-                args["limit"] is { } il ? (int)il : null)),
+                args["limit"] is { } il ? (int)il : null,
+                Text("reference"),
+                Text("reference_prefix"))),
             "collections.delete_item" => Wrap(client.Collections.DeleteItemAsync(Text("collection_id")!, Text("item_id")!)),
             _ => throw new InvalidOperationException("unknown method " + method),
         };
@@ -844,6 +857,7 @@ public static class Driver
             _ => null,
         },
         ["boosters"] = BoosterStatuses(e.Boosters),
+        ["details"] = e.Details?.DeepClone(),
     };
 
     private static JsonObject BoosterStatuses(IReadOnlyDictionary<string, BoosterStatus> boosters)
