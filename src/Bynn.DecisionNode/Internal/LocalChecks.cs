@@ -1239,6 +1239,20 @@ internal static class LocalChecks
     internal static BadRequestError BadRequest(string message, string? errorType, string? reason = null) =>
         new(new ErrorDetails { Message = message, ErrorType = errorType, Reason = reason });
 
+    /// <summary>
+    /// A keys call's <c>422</c>, raised before any request: the one entry the API answers first,
+    /// <c>value_error</c> at <c>["body", ...]</c>, its input echoed within bounds.
+    /// </summary>
+    internal static ValidationError KeyRefusal(JsonArray loc, string msg, JsonNode? input)
+    {
+        var bodyLoc = new JsonArray("body");
+        foreach (var part in loc)
+        {
+            bodyLoc.Add(part?.DeepClone());
+        }
+        return Unprocessable(new List<JsonNode?> { Entry("value_error", bodyLoc, msg, EchoedNode(input)) });
+    }
+
     /// <summary>The API's <c>422</c>, raised before any request: the entries the server would list.</summary>
     private static ValidationError Unprocessable(List<JsonNode?> entries)
     {

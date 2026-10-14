@@ -147,6 +147,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         Batches = new BatchesClient(this);
         Collections = new CollectionsClient(this);
         Usage = new UsageClient(this);
+        Keys = new KeysClient(this);
     }
 
     /// <summary>
@@ -356,6 +357,9 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     /// <summary>Per-key usage: one key's, or every key's of the workspace, over a period.</summary>
     public UsageClient Usage { get; }
+
+    /// <summary>The workspace's Decisions-only keys for devices: make, list, change and revoke them, with a Manage device keys key.</summary>
+    public KeysClient Keys { get; }
 
     /// <summary>
     /// The wait between attempts. Tests replace it to record the waits the client schedules

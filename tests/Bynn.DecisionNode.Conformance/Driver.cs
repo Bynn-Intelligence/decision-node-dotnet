@@ -195,6 +195,38 @@ public static class Driver
                 args["limit"] is { } il ? (int)il : null,
                 Text("reference"),
                 Text("reference_prefix"))),
+            "keys.create" => Wrap(client.Keys.CreateAsync(
+                new KeyCreate
+                {
+                    Name = Text("name")!,
+                    DeviceId = Text("device_id"),
+                    Labels = LabelsOf(args["labels"]),
+                    Limits = LimitsOf(args["limits"]),
+                    DailySpendCapUsd = args["daily_spend_cap"] is JsonObject cap ? (decimal)cap["usd"]! : null,
+                    ExpiresAt = Text("expires_at"),
+                    MaySearchCollections = args["may_search_collections"] is { } msc ? (bool)msc : null,
+                },
+                Text("idempotency_key"))),
+            "keys.list" => Wrap(client.Keys.ListAsync(KeyListOf(args, ctx), Text("cursor"))),
+            "keys.all" => Wrap(client.Keys.AllAsync(KeyListOf(args, ctx))),
+            "keys.update" => Wrap(client.Keys.UpdateAsync(Text("key_id")!, new KeyUpdate
+            {
+                Name = Text("name"),
+                Labels = LabelsOf(args["labels"]),
+                ClearLabels = args.ContainsKey("labels") && args["labels"] is null,
+                Limits = LimitsOf(args["limits"]),
+                ClearLimits = args.ContainsKey("limits") && args["limits"] is null,
+                DailySpendCapUsd = args["daily_spend_cap"] is JsonObject ucap ? (decimal)ucap["usd"]! : null,
+                ClearDailySpendCap = args.ContainsKey("daily_spend_cap") && args["daily_spend_cap"] is null,
+                ExpiresAt = Text("expires_at"),
+                ClearExpiresAt = args.ContainsKey("expires_at") && args["expires_at"] is null,
+                MaySearchCollections = args["may_search_collections"] is { } umsc ? (bool)umsc : null,
+            })),
+            "keys.revoke" => Wrap(client.Keys.RevokeAsync(Text("key_id")!)),
+            "keys.revoke_by_labels" => Wrap(client.Keys.RevokeByLabelsAsync(
+                LabelsOf(args["labels"]) ?? new Dictionary<string, string>(),
+                Plain(args["device_ids"], ctx) is JsonArray devices ? devices.Select(d => (string)d!).ToList() : null,
+                args["dry_run"] is { } dry ? (bool)dry : null)),
             "usage.key" => Wrap(client.Usage.KeyAsync(Text("key_id")!, Text("start"), Text("end"), Text("granularity"), Text("group_by"))),
             "usage.list" => Wrap(client.Usage.ListAsync(UsageQueryOf(args, ctx), Text("cursor"))),
             "usage.all" => Wrap(client.Usage.AllAsync(UsageQueryOf(args, ctx))),
@@ -343,6 +375,20 @@ public static class Driver
 
     private static List<KeyValuePair<string, object?>> Options(JsonObject options) =>
         options.Select(p => new KeyValuePair<string, object?>(p.Key, p.Value?.DeepClone())).ToList();
+
+    private static Dictionary<string, string>? LabelsOf(JsonNode? labels) =>
+        labels is JsonObject o ? o.ToDictionary(kv => kv.Key, kv => (string)kv.Value!) : null;
+
+    private static KeyLimits? LimitsOf(JsonNode? limits) =>
+        limits is JsonObject o ? new KeyLimits(o["requests_per_second"] is { } r ? (int)r : null, o["tokens_per_second"] is { } t ? (int)t : null) : null;
+
+    private static KeyListQuery KeyListOf(JsonObject args, Dictionary<string, object?> ctx) => new()
+    {
+        Labels = LabelsOf(args["labels"]),
+        DeviceId = (string?)Plain(args["device_id"], ctx),
+        Status = (string?)Plain(args["status"], ctx),
+        Limit = args["limit"] is { } l ? (int)l : null,
+    };
 
     private static UsageQuery UsageQueryOf(JsonObject args, Dictionary<string, object?> ctx)
     {

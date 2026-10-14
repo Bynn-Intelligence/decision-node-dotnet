@@ -459,11 +459,11 @@ public sealed class ConformanceTests
     }
 
     /// <summary>The collections calls' results (suite 1.13), each the API's object as sent; <c>collections</c> is the list.</summary>
-    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted", "key_usage", "usage_page", "usage_items" };
+    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted", "key_usage", "usage_page", "usage_items", "created_key", "api_key", "key_page", "api_keys", "key_revoked", "keys_revoked" };
 
     private static void CheckCollectionResult(string kind, JsonNode? expected, object? result, string path)
     {
-        if (kind is "collections" or "usage_items")
+        if (kind is "collections" or "usage_items" or "api_keys")
         {
             if (result is not IReadOnlyList<JsonObject> list)
             {

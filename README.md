@@ -416,6 +416,26 @@ await foreach (var r in run.Results)
 
 Create, add and finalize change the batch, so they are retried only on `429` and `529`, which the API answers before applying anything, and never after a timeout or a lost answer. A finalize answered `409` is read back with `GetAsync`: when the batch is no longer a draft, an earlier finalize went through and the batch is returned.
 
+## Keys
+
+A provisioning server makes, lists, changes and revokes the Decisions-only keys of its devices with a Manage device keys key, made in the console and kept on the server; any other kind of key gets a `PermissionDeniedError` (`key_scope_denied`).
+
+```csharp
+var made = await dn.Keys.CreateAsync(new KeyCreate
+{
+    Name = "Kiosk 0412",
+    DeviceId = "kiosk-0412",
+    Labels = new Dictionary<string, string> { ["store"] = "118" },
+    DailySpendCapUsd = 2m,
+}, idempotencyKey: "provisioning-kiosk-0412");
+var secret = (string)made["secret"]!; // shown once: hand it to the device, never log it
+
+await dn.Keys.UpdateAsync((string)made["key"]!["id"]!, new KeyUpdate { ClearDailySpendCap = true });
+await dn.Keys.RevokeByLabelsAsync(new Dictionary<string, string> { ["store"] = "118" }, dryRun: true);
+```
+
+`CreateAsync(key, idempotencyKey)` sends only the fields given and returns `{"key", "secret"}`; the secret is returned this once. It always sends an `Idempotency-Key`, yours or a new one kept across its attempts, so a call repeated after a lost answer returns the same key and makes no second one. `ListAsync(query, cursor)` reads one page, newest first (`Labels`, `DeviceId`, `Status`, `Limit` from 1 to 200), and `AllAsync(query)` every page. `UpdateAsync` (only the fields given; a `Clear` flag removes labels, limits, the spend cap or the expiry) and `RevokeAsync` take the key's id; `RevokeByLabelsAsync(labels, deviceIds, dryRun)` revokes every active key whose labels match, up to 10,000 a call, while `more` is `true`. A revocation takes effect at once and cannot be undone.
+
 ## Usage by key
 
 What each key asked and cost over a period: requests, tokens, booster calls and the charge, as totals or by hour, day or month. Call it with a Full access or Manage device keys key, on your server; a Decisions-only or Publishable key gets a `PermissionDeniedError` (`key_scope_denied`).

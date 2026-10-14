@@ -27,6 +27,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - `FaceRecognitionReading.CollectionName` and each `FaceMatch`'s `CollectionName` and `Metadata` (the item's object as received), each `null` when absent; a `collection_name` that is not a string or a match's `metadata` that is not an object makes the reading an `UnknownReading`.
 - `ModelInfo.PricePerMillionInput`, `PricePerMillionOutput`, `PricePerMillionImage`, `PricePerMillionVideo` and `BatchPriceFactor`, as the entry sends them (they stay in `Limits` too).
 - Usage by key on `dn.Usage`: `KeyAsync` (`GET /v1/keys/{key_id}/usage`), `ListAsync` (`GET /v1/usage`, one page, with a `UsageQuery` and a cursor) and `AllAsync` (every page's rows), each returning the API's object as sent; the query filters the API checks are refused before anything is sent with its message. A `429` `key_spend_cap_reached` is raised at once as a `RateLimitError`, never retried, since its wait runs to 00:00 UTC; the publishable keys' `403` `origin_not_allowed` and `model_not_allowed` are `PermissionDeniedError`s with their `Details`.
+- Device keys on `dn.Keys`: `CreateAsync` (`POST /v1/keys`, with a `KeyCreate`, always an `Idempotency-Key`: yours, else a new one kept across attempts, retried as collections' create), `ListAsync` and `AllAsync` (`GET /v1/keys`, with a `KeyListQuery`), `UpdateAsync` (`PATCH`, with a `KeyUpdate` whose `Clear` flags send `null`), `RevokeAsync` (`DELETE`) and `RevokeByLabelsAsync` (`POST /v1/keys/revoke`), each returning the API's object as sent. A key's fixed rules (a name of 1 to 48 characters, the device id, at most 16 labels and their names and values, a spend cap of 0.01 to 1,000 USD in whole cents, at least one label and at most 1,000 devices for a bulk revoke) are the API's `422` before anything is sent, the first refused in the body's order; an update with nothing to change is its `400`; an `Idempotency-Key` that is not 1 to 255 printable ASCII characters and a list filter the API would refuse are refused before anything is sent, with the API's message.
 
 ### Changed
 
@@ -36,7 +37,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - `boosters` and `fallback` sit after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
 - A fine-tuned model's name (`decisionnode-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
 - Every `413`, a presign's and a batch add's included, is a `RequestTooLargeError` (the base `DecisionNodeError` before).
-- CI runs conformance suite 1.19.
+- CI runs conformance suite 1.20.
 
 ## [0.2.0] - Unreleased
 
