@@ -93,8 +93,9 @@ public sealed partial class DecisionNodeClient
 }
 
 /// <summary>
-/// The Batch API (<see cref="DecisionNodeClient.Batches"/>): many decisions answered within
-/// 24 hours at half the price. Every call is safe to retry except create, add and
+/// The Batch API (<see cref="DecisionNodeClient.Batches"/>): many decisions for less than live
+/// calls (DecisionNode Flash 50% off, DecisionNode MoE 30% off). A batch has no set finishing time;
+/// requests unanswered 24 hours after finalize expire unbilled. Every call is safe to retry except create, add and
 /// finalize, which are retried only on <c>429</c> and <c>529</c>.
 /// </summary>
 public sealed class BatchesClient

@@ -2,7 +2,7 @@
 
 [DecisionNode](https://decisionnode.com) is a decision engine: send it text, JSON or images with a question, and it answers with calibrated probabilities.
 
-The official .NET client for the DecisionNode API: ask yes-or-no, choice, score and number questions about any state, and get calibrated probabilities back. One request at a time, many in parallel, a live stream of readings in a session, or a batch at half the price.
+The official .NET client for the DecisionNode API: ask yes-or-no, choice, score and number questions about any state, and get calibrated probabilities back. One request at a time, many in parallel, a live stream of readings in a session, or a batch at a lower price than live calls.
 
 ## Install
 
@@ -386,7 +386,7 @@ The WebSocket connects through the client's `HttpClient`, so a proxy or certific
 
 ## Batches
 
-The Batch API answers many decisions within 24 hours at half the price.
+The Batch API answers many decisions for less than live calls: DecisionNode Flash at 50% off the live price and DecisionNode MoE at 30% off ([pricing](https://decisionnode.com/docs/pricing#batch-jobs)). A batch has no set finishing time, so poll it; requests still unanswered 24 hours after it is finalized expire, unbilled.
 
 ```csharp
 var run = await dn.RunBatchAsync(tickets.Select((t, i) => new BatchRequest
