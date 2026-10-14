@@ -38,12 +38,21 @@ public static class Compare
         switch (a)
         {
             case JsonObject oa when b is JsonObject ob:
-                if (oa.Count != ob.Count)
+                // {"$absent": true} (suite 1.17): the key must not be there at all.
+                if (oa.Any(e => IsAbsent(e.Value) && ob.ContainsKey(e.Key)))
+                {
+                    return false;
+                }
+                if (oa.Count(e => !IsAbsent(e.Value)) != ob.Count)
                 {
                     return false;
                 }
                 foreach (var (k, v) in oa)
                 {
+                    if (IsAbsent(v))
+                    {
+                        continue;
+                    }
                     if (!ob.TryGetPropertyValue(k, out var w) || !Same(v, w))
                     {
                         return false;
@@ -77,12 +86,24 @@ public static class Compare
         v.TryGetValue(out JsonElement e) ? e.GetDouble() : JsonSerializer.Deserialize<double>(v.ToJsonString());
 
     /// <summary>Every key of <paramref name="expected"/> must be in <paramref name="actual"/> with the same value.</summary>
+    /// <summary>The marker <c>{"$absent": true}</c> (suite 1.17): a key that must be missing from the actual object.</summary>
+    private static bool IsAbsent(JsonNode? value) =>
+        value is JsonObject o && o.Count == 1 && o["$absent"] is JsonValue v && v.GetValueKind() == JsonValueKind.True;
+
     public static void Match(JsonNode? expected, JsonNode? actual, string path)
     {
         if (expected is JsonObject eo && actual is JsonObject ao)
         {
             foreach (var (k, v) in eo)
             {
+                if (IsAbsent(v))
+                {
+                    if (ao.ContainsKey(k))
+                    {
+                        throw Fail($"{path}.{k}: expected no such key, got {Short(ao[k])}");
+                    }
+                    continue;
+                }
                 if (!ao.TryGetPropertyValue(k, out var got))
                 {
                     throw Fail($"{path}.{k}: missing (expected {Short(v)})");

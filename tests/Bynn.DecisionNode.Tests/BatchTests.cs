@@ -5,7 +5,7 @@ namespace Bynn.DecisionNode.Tests;
 
 public class BatchTests
 {
-    private const string Draft = """{"id":"batch_01J9ZB8Q3T","state":"draft","counters":{"requests":0,"queued":0,"in_progress":0,"completed":0,"failed":0,"expired":0,"cancelled":0},"created_at":"2026-10-06T09:12:04Z","finalized_at":null,"expires_at":null,"ended_at":null,"results_url":null,"results_expire_at":null,"price_factor":0.5,"usage":{"input_tokens":0,"output_tokens":0},"error":null}""";
+    private const string Draft = """{"id":"batch_01J9ZB8Q3T","state":"draft","counters":{"requests":0,"queued":0,"in_progress":0,"completed":0,"failed":0,"expired":0,"cancelled":0},"created_at":"2026-10-06T09:12:04Z","finalized_at":null,"expires_at":null,"ended_at":null,"results_url":null,"results_expire_at":null,"usage":{"input_tokens":0,"output_tokens":0},"error":null}""";
 
     private static string WithState(string state, bool ended = false)
     {
@@ -32,7 +32,8 @@ public class BatchTests
         Assert.Equal("""{"custom_id":"a","model":"decisionnode-moe","state":"charged twice","questions":{"q":{"type":"truth","instructions":"Refund?"}}}""", lines[0]);
         Assert.Equal("""{"custom_id":"b","model":"decisionnode-flash","state":"","questions":{"q":{"type":"truth","instructions":"?"}}}""", lines[1]);
         Assert.Equal("batch_01J9ZB8Q3T", batch.Id);
-        Assert.Equal(0.5, batch.PriceFactor);
+        // The batch price is each model's (ModelInfo.BatchPriceFactor), never the batch's.
+        Assert.False(batch.Raw.ContainsKey("price_factor"));
     }
 
     [Fact]
@@ -229,5 +230,19 @@ public class BatchTests
         using var dn = Client(stub);
         dn.Delay = (_, _) => Task.CompletedTask;
         await Assert.ThrowsAsync<TimeoutException>(() => dn.RunBatchAsync(new[] { Line("a") }, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(35)));
+    }
+
+    [Fact]
+    public async Task TheBatchPriceIsEachModels()
+    {
+        using var dn = Client(new StubHandler((_, _) => Ok("""
+            {"models":[
+              {"name":"decisionnode-moe-0.9.0-rc1","price_per_million_input":0.042,"price_per_million_output":0,"price_per_million_image":0.042,"price_per_million_video":0.042,"batch_price_factor":0.7},
+              {"name":"decisionnode-flash@acme/fraud:3","fine_tuned":true,"price_per_million_input":0.041}]}
+            """)));
+        var models = await dn.ModelsAsync();
+        Assert.Equal((0.042, 0.0, 0.7), (models[0].PricePerMillionInput, models[0].PricePerMillionOutput, models[0].BatchPriceFactor));
+        Assert.Equal(0.7, (double)models[0].Limits["batch_price_factor"]!);
+        Assert.Null(models[1].BatchPriceFactor);
     }
 }

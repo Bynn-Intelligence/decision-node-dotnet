@@ -923,7 +923,6 @@ public static class Driver
         ["ended_at"] = b.EndedAt,
         ["results_url"] = b.ResultsUrl,
         ["results_expire_at"] = b.ResultsExpireAt,
-        ["price_factor"] = b.PriceFactor,
         ["usage"] = Usage(b.Usage),
         ["error"] = b.ErrorType is null && b.ErrorMessage is null ? null : new JsonObject { ["error_type"] = b.ErrorType, ["message"] = b.ErrorMessage },
     };

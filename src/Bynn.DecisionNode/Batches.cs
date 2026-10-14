@@ -451,7 +451,6 @@ public sealed class Batch
         EndedAt = JsonValues.AsString(raw["ended_at"]);
         ResultsUrl = JsonValues.AsString(raw["results_url"]);
         ResultsExpireAt = JsonValues.AsString(raw["results_expire_at"]);
-        PriceFactor = JsonValues.TryDouble(raw["price_factor"], out var f) ? f : null;
         Usage = Session.UsageOf(raw["usage"]);
         if (raw["error"] is JsonObject error)
         {
@@ -484,8 +483,10 @@ public sealed class Batch
     /// <summary>When the results are deleted: 7 days after the end.</summary>
     public string? ResultsExpireAt { get; }
 
-    public double? PriceFactor { get; }
-
+    /// <summary>
+    /// What the batch has billed so far, each line at its own model's batch price
+    /// (<see cref="ModelInfo.BatchPriceFactor"/>); each line's charge is in its own usage.
+    /// </summary>
     public Usage? Usage { get; }
 
     /// <summary>A failed batch's <c>error.error_type</c> (<c>batch_failed</c>).</summary>

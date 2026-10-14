@@ -238,8 +238,28 @@ public sealed class ModelInfo
     /// <summary>The model's session limits (<c>sessions</c>: <c>max_per_key</c>, <c>max_window</c>, <c>max_frame_tokens</c> and the rest).</summary>
     public JsonObject? Sessions => Raw["sessions"] as JsonObject;
 
-    /// <summary>The model's Batch API limits (<c>batch</c>: <c>requests_per_batch</c>, <c>add_bytes</c>, <c>price_factor</c> and the rest).</summary>
+    /// <summary>The model's Batch API limits (<c>batch</c>: <c>requests_per_batch</c>, <c>add_bytes</c> and the rest).</summary>
     public JsonObject? Batch => Raw["batch"] as JsonObject;
+
+    /// <summary>The live price per million input tokens, in USD (<c>price_per_million_input</c>), as sent; <c>null</c> when the entry has none.</summary>
+    public double? PricePerMillionInput => Number("price_per_million_input");
+
+    /// <summary>The price per million output tokens, in USD (<c>price_per_million_output</c>), as sent.</summary>
+    public double? PricePerMillionOutput => Number("price_per_million_output");
+
+    /// <summary>The price per million image tokens, in USD (<c>price_per_million_image</c>), as sent.</summary>
+    public double? PricePerMillionImage => Number("price_per_million_image");
+
+    /// <summary>The price per million video tokens, in USD (<c>price_per_million_video</c>), as sent.</summary>
+    public double? PricePerMillionVideo => Number("price_per_million_video");
+
+    /// <summary>
+    /// The share of the live price a batch line of this model is billed (<c>batch_price_factor</c>,
+    /// for example 0.5); <c>null</c> on a model that takes no batches, such as a fine-tuned model.
+    /// </summary>
+    public double? BatchPriceFactor => Number("batch_price_factor");
+
+    private double? Number(string key) => JsonValues.TryDouble(Raw[key], out var d) ? d : null;
 
     /// <summary><c>true</c> for a fine-tuned model of the key's workspace; <c>null</c> on a catalogue entry.</summary>
     public bool? FineTuned => Raw["fine_tuned"] is JsonValue v && v.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False ? v.GetValue<bool>() : null;

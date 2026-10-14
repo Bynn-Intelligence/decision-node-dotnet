@@ -386,7 +386,7 @@ The WebSocket connects through the client's `HttpClient`, so a proxy or certific
 
 ## Batches
 
-The Batch API answers many decisions for less than live calls: DecisionNode Flash at 50% off the live price and DecisionNode MoE at 30% off ([pricing](https://decisionnode.com/docs/pricing#batch-jobs)). A batch has no set finishing time, so poll it; requests still unanswered 24 hours after it is finalized expire, unbilled.
+The Batch API answers many decisions for less than live calls. The batch price is each model's: `ModelsAsync()` states it as the model's `BatchPriceFactor` (DecisionNode MoE 0.7 and DecisionNode Flash 0.5 of the live price; none on a fine-tuned model, which takes no batches), and each line is billed at its own model's, its charge in the line's usage ([pricing](https://decisionnode.com/docs/pricing#batch-jobs)). A batch has no set finishing time, so poll it; requests still unanswered 24 hours after it is finalized expire, unbilled.
 
 ```csharp
 var run = await dn.RunBatchAsync(tickets.Select((t, i) => new BatchRequest
