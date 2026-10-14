@@ -194,6 +194,24 @@ public sealed class ConformanceTests
                 throw Fail($"{where} query: expected {query.ToJsonString()}, got {string.Join("&", have.Select(kv => kv.Key + "=" + kv.Value))}");
             }
         }
+        if (exp["query_all"] is JsonObject queryAll)
+        {
+            // Suite 1.18: every value of each parameter, a repeated one in its order; the order
+            // between parameters is free.
+            var have = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var pair in ((string?)got["query"] ?? string.Empty).Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = pair.IndexOf('=');
+                var key = Uri.UnescapeDataString((eq < 0 ? pair : pair[..eq]).Replace('+', ' '));
+                var value = eq < 0 ? string.Empty : Uri.UnescapeDataString(pair[(eq + 1)..].Replace('+', ' '));
+                (have.TryGetValue(key, out var values) ? values : have[key] = new List<string>()).Add(value);
+            }
+            var want = queryAll.ToDictionary(kv => kv.Key, kv => ((JsonArray)kv.Value!).Select(v => (string)v!).ToList());
+            if (have.Count != want.Count || want.Any(kv => !have.TryGetValue(kv.Key, out var v) || !v.SequenceEqual(kv.Value)))
+            {
+                throw Fail($"{where} query: expected {queryAll.ToJsonString()}, got {(string?)got["query"]}");
+            }
+        }
         if (exp["status"] is { } status && (int?)got["status"] != (int)status)
         {
             throw Fail($"{where} status: the mock answered {got["status"]}, expected {status}");
@@ -441,20 +459,20 @@ public sealed class ConformanceTests
     }
 
     /// <summary>The collections calls' results (suite 1.13), each the API's object as sent; <c>collections</c> is the list.</summary>
-    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted" };
+    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted", "key_usage", "usage_page", "usage_items" };
 
     private static void CheckCollectionResult(string kind, JsonNode? expected, object? result, string path)
     {
-        if (kind == "collections")
+        if (kind is "collections" or "usage_items")
         {
             if (result is not IReadOnlyList<JsonObject> list)
             {
-                throw Fail($"{path}: expected a list of collections, got {Describe(result)}");
+                throw Fail($"{path}: expected a list, got {Describe(result)}");
             }
             var wanted = (JsonArray)expected!;
             if (wanted.Count != list.Count)
             {
-                throw Fail($"{path}: expected {wanted.Count} collections, got {list.Count}");
+                throw Fail($"{path}: expected {wanted.Count} entries, got {list.Count}");
             }
             for (var i = 0; i < list.Count; i++)
             {
@@ -924,7 +942,7 @@ public sealed class ConformanceTests
             var spec = (JsonObject)expected[i]!;
             var rec = (JsonObject)log[i]!;
             var checks = new JsonObject { ["method"] = spec["method"]!.DeepClone() };
-            foreach (var key in new[] { "path", "path_pattern", "status", "headers", "header_patterns", "absent_headers", "body_checks", "jsonl_count", "jsonl_checks", "body_base64", "body_sha256", "query" })
+            foreach (var key in new[] { "path", "path_pattern", "status", "headers", "header_patterns", "absent_headers", "body_checks", "jsonl_count", "jsonl_checks", "body_base64", "body_sha256", "query", "query_all" })
             {
                 if (spec[key] is { } v)
                 {

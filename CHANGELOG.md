@@ -26,6 +26,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - Collection items found by reference, edited and described: `EnrollAsync` takes `metadata` (an object, sent only when given); `UpdateItemAsync(collectionId, itemId, CollectionItemUpdate)` sends a `PATCH` of only the fields given (`Reference`, `Label`, `ClearLabel` to send `"label": null`, `Metadata` replacing the whole object), with an `Idempotency-Key` and the retries of enroll; `ListItemsAsync` takes `reference` and `referencePrefix`. Metadata (at most 20 keys of `[a-z0-9_]{1,40}`, each a text of at most 500 characters, a number or a boolean), an update with nothing to change and both filters or a malformed one are refused before anything is sent, as the API refuses them. `DecisionNodeError.Details` holds the server's `detail.details`; a `529` whose reason is `enrollment_unpriced` is never retried.
 - `FaceRecognitionReading.CollectionName` and each `FaceMatch`'s `CollectionName` and `Metadata` (the item's object as received), each `null` when absent; a `collection_name` that is not a string or a match's `metadata` that is not an object makes the reading an `UnknownReading`.
 - `ModelInfo.PricePerMillionInput`, `PricePerMillionOutput`, `PricePerMillionImage`, `PricePerMillionVideo` and `BatchPriceFactor`, as the entry sends them (they stay in `Limits` too).
+- Usage by key on `dn.Usage`: `KeyAsync` (`GET /v1/keys/{key_id}/usage`), `ListAsync` (`GET /v1/usage`, one page, with a `UsageQuery` and a cursor) and `AllAsync` (every page's rows), each returning the API's object as sent; the query filters the API checks are refused before anything is sent with its message. A `429` `key_spend_cap_reached` is raised at once as a `RateLimitError`, never retried, since its wait runs to 00:00 UTC; the publishable keys' `403` `origin_not_allowed` and `model_not_allowed` are `PermissionDeniedError`s with their `Details`.
 
 ### Changed
 
@@ -35,7 +36,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - `boosters` and `fallback` sit after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
 - A fine-tuned model's name (`decisionnode-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
 - Every `413`, a presign's and a batch add's included, is a `RequestTooLargeError` (the base `DecisionNodeError` before).
-- CI runs conformance suite 1.17.
+- CI runs conformance suite 1.19.
 
 ## [0.2.0] - Unreleased
 

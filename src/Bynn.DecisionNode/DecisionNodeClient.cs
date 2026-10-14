@@ -146,6 +146,7 @@ public sealed partial class DecisionNodeClient : IDisposable
         }
         Batches = new BatchesClient(this);
         Collections = new CollectionsClient(this);
+        Usage = new UsageClient(this);
     }
 
     /// <summary>
@@ -352,6 +353,9 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     /// <summary>The workspace's collections of faces, which the <c>face_recognition</c> booster searches.</summary>
     public CollectionsClient Collections { get; }
+
+    /// <summary>Per-key usage: one key's, or every key's of the workspace, over a period.</summary>
+    public UsageClient Usage { get; }
 
     /// <summary>
     /// The wait between attempts. Tests replace it to record the waits the client schedules
@@ -947,6 +951,11 @@ public sealed partial class DecisionNodeClient : IDisposable
             if (result.Status == 529 && JsonValues.AsString(error.Details?["reason"]) == "enrollment_unpriced")
             {
                 // No price for an enrollment on this deployment: a retry never cures it.
+                retryable = false;
+            }
+            if (result.Status == 429 && error.ErrorType == "key_spend_cap_reached")
+            {
+                // The key's daily spend cap: its Retry-After runs to 00:00 UTC, so it is raised at once.
                 retryable = false;
             }
             if (retryable && attempt < MaxRetries)

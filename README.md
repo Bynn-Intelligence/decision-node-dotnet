@@ -416,6 +416,26 @@ await foreach (var r in run.Results)
 
 Create, add and finalize change the batch, so they are retried only on `429` and `529`, which the API answers before applying anything, and never after a timeout or a lost answer. A finalize answered `409` is read back with `GetAsync`: when the batch is no longer a draft, an earlier finalize went through and the batch is returned.
 
+## Usage by key
+
+What each key asked and cost over a period: requests, tokens, booster calls and the charge, as totals or by hour, day or month. Call it with a Full access or Manage device keys key, on your server; a Decisions-only or Publishable key gets a `PermissionDeniedError` (`key_scope_denied`).
+
+```csharp
+// One key: a device's month so far, or a period by the day.
+var key = await dn.Usage.KeyAsync("key_3b8f0d6e2a914c7b9e5f1a2c4d6e8f01",
+    start: "2026-10-01T00:00:00Z", end: "2026-10-03T00:00:00Z", granularity: "day");
+
+// Every key of a customer, one row per key: the read behind a monthly invoice run.
+var rows = await dn.Usage.AllAsync(new UsageQuery
+{
+    Start = "2026-10-01T00:00:00Z",
+    End = "2026-11-01T00:00:00Z",
+    Labels = new Dictionary<string, string> { ["customer"] = "acme" },
+});
+```
+
+`KeyAsync(keyId, start, end, granularity, groupBy)` reads `GET /v1/keys/{key_id}/usage`; left out, the period is the UTC month so far. `ListAsync(query, cursor)` reads one page of `GET /v1/usage` (`period`, `as_of`, `items`, `next_cursor`), and `AllAsync(query)` follows `next_cursor` until it is `null` and returns every row, since a page can hold fewer keys than `Limit`. A `UsageQuery` takes `Start` and `End` (RFC 3339; a period is at most 400 days), `Granularity` (`none`, `hour`, `day` or `month`), `GroupBy` (`model` or `channel`), `Labels` (a key must match every one), `DeviceId`, `KeyIds` (up to 100), `Scope` (`full`, `decide` or `keys`), `Status` (`active`, `expired`, `revoked` or `all`), `IncludeEmpty` and `Limit` (1 to 1,000). Each call returns the API's object as sent, and a filter the API would refuse throws its `BadRequestError` before anything is sent.
+
 ## Safety
 
 On the hosted API every decision carries the result of a safety check in `decision.Safety`: `Checked`, `Harm`, `SelfHarm`, `Flagged` (the categories above your key's thresholds) and, when the check did not run, `Reason`. A self-hosted server sends none, and `Safety` is `null`. A request refused under the usage policy throws `RefusalError`, which is never retried.

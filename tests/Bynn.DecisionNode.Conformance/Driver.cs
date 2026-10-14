@@ -195,6 +195,9 @@ public static class Driver
                 args["limit"] is { } il ? (int)il : null,
                 Text("reference"),
                 Text("reference_prefix"))),
+            "usage.key" => Wrap(client.Usage.KeyAsync(Text("key_id")!, Text("start"), Text("end"), Text("granularity"), Text("group_by"))),
+            "usage.list" => Wrap(client.Usage.ListAsync(UsageQueryOf(args, ctx), Text("cursor"))),
+            "usage.all" => Wrap(client.Usage.AllAsync(UsageQueryOf(args, ctx))),
             "collections.delete_item" => Wrap(client.Collections.DeleteItemAsync(Text("collection_id")!, Text("item_id")!)),
             _ => throw new InvalidOperationException("unknown method " + method),
         };
@@ -340,6 +343,25 @@ public static class Driver
 
     private static List<KeyValuePair<string, object?>> Options(JsonObject options) =>
         options.Select(p => new KeyValuePair<string, object?>(p.Key, p.Value?.DeepClone())).ToList();
+
+    private static UsageQuery UsageQueryOf(JsonObject args, Dictionary<string, object?> ctx)
+    {
+        string? Text(string key) => (string?)Plain(args[key], ctx);
+        return new UsageQuery
+        {
+            Start = Text("start")!,
+            End = Text("end")!,
+            Granularity = Text("granularity"),
+            GroupBy = Text("group_by"),
+            Labels = args["labels"] is JsonObject labels ? labels.ToDictionary(kv => kv.Key, kv => (string)kv.Value!) : null,
+            DeviceId = Text("device_id"),
+            KeyIds = Plain(args["key_ids"], ctx) is JsonArray ids ? ids.Select(i => (string)i!).ToList() : null,
+            Scope = Text("scope"),
+            Status = Text("status"),
+            IncludeEmpty = args["include_empty"] is { } e ? (bool)e : null,
+            Limit = args["limit"] is { } l ? (int)l : null,
+        };
+    }
 
     private static DecideRequest Request(JsonObject args, Dictionary<string, object?> ctx) => new()
     {
