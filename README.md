@@ -6,6 +6,14 @@ The official .NET client for the DecisionNode API: ask yes-or-no, choice, score 
 
 ## Install
 
+Not on NuGet yet: the first release publishes it there. Until then, reference the project from a clone of this repository:
+
+```sh
+dotnet add reference path/to/decision-node-dotnet/src/Bynn.DecisionNode/Bynn.DecisionNode.csproj
+```
+
+Once it is on NuGet:
+
 ```sh
 dotnet add package Bynn.DecisionNode
 ```
