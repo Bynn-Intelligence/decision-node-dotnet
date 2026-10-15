@@ -891,10 +891,75 @@ public static class Driver
                 ["metadata"] = m.Metadata?.DeepClone(),
             }).ToArray()),
         },
+        DepthReading d => new JsonObject
+        {
+            ["kind"] = "bynn_depth",
+            ["image"] = d.Image,
+            ["ahead"] = d.Ahead,
+            ["directions"] = new JsonArray(d.Directions.Select(x => (JsonNode?)x).ToArray()),
+            ["ground"] = d.Ground,
+            ["grid_rows"] = d.GridRows,
+            ["grid_cols"] = d.GridCols,
+            ["grid"] = new JsonArray(d.Grid.Select(row => (JsonNode?)Numbers(row.ToArray())).ToArray()),
+            ["depth_min"] = d.DepthMin,
+            ["depth_max"] = d.DepthMax,
+            ["depth_median"] = d.DepthMedian,
+            ["width"] = d.Width,
+            ["height"] = d.Height,
+        },
+        // Segment Vision as the cases write it: the wire's fields and shapes, an empty
+        // opening, depth or size_m (and the size's opening) as null.
+        SegmentReading s => new JsonObject
+        {
+            ["kind"] = "bynn_segment",
+            ["image"] = s.Image,
+            ["width"] = s.Width,
+            ["height"] = s.Height,
+            ["prompts"] = new JsonArray(s.Prompts.Select(p => (JsonNode?)p).ToArray()),
+            ["depth_source"] = s.DepthSource,
+            ["assumed_hfov_deg"] = s.AssumedHfovDeg,
+            ["instances"] = new JsonArray(s.Instances.Select(i => (JsonNode?)new JsonObject
+            {
+                ["label"] = i.Label,
+                ["score"] = i.Score,
+                ["box"] = Numbers(i.Box.X1, i.Box.Y1, i.Box.X2, i.Box.Y2),
+                ["polygon"] = Points(i.Polygon),
+                ["area"] = i.Area,
+                ["centroid"] = Point(i.Centroid),
+                ["opening"] = i.Opening is { } o
+                    ? new JsonObject
+                    {
+                        ["polygon"] = Points(o.Polygon),
+                        ["centroid"] = Point(o.Centroid),
+                        ["width"] = o.Width,
+                        ["height"] = o.Height,
+                        ["offset"] = Point(o.Offset),
+                        ["area"] = o.Area,
+                    }
+                    : null,
+                ["depth"] = i.Depth is { } m
+                    ? new JsonObject { ["median"] = m.Median, ["opening_median"] = m.OpeningMedian, ["opening_rim_median"] = m.OpeningRimMedian }
+                    : null,
+                ["size_m"] = i.SizeM is { } z
+                    ? new JsonObject
+                    {
+                        ["width"] = z.Width,
+                        ["height"] = z.Height,
+                        ["opening"] = z.Opening is { } h ? new JsonObject { ["width"] = h.Width, ["height"] = h.Height } : null,
+                    }
+                    : null,
+            }).ToArray()),
+        },
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
     };
 
     private static JsonObject Box(FaceBox b) => new() { ["x1"] = b.X1, ["y1"] = b.Y1, ["x2"] = b.X2, ["y2"] = b.Y2 };
+
+    private static JsonArray Numbers(params double[] numbers) => new(numbers.Select(n => (JsonNode?)n).ToArray());
+
+    private static JsonArray Point(SegmentPoint p) => Numbers(p.X, p.Y);
+
+    private static JsonArray Points(IEnumerable<SegmentPoint> points) => new(points.Select(p => (JsonNode?)Point(p)).ToArray());
 
     public static JsonObject Decision(Decision d) => new()
     {

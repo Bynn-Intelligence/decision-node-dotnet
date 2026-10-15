@@ -38,7 +38,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `
 - `boosters` and `fallback` sit after `model` in the parameter lists of `DecideAsync` and the helpers, before the `CancellationToken`; callers that pass the token by position pass it by name.
 - A fine-tuned model's name (`decisionnode-flash@acme/fraud`, or `...:3` for one version) goes in `model` as given; the decision's `Model` is the pinned name that answered.
 - Every `413`, a presign's and a batch add's included, is a `RequestTooLargeError` (the base `DecisionNodeError` before).
-- CI runs conformance suite 1.20.
+- CI runs conformance suite 1.21.
 
 ## [0.2.0] - Unreleased
 
