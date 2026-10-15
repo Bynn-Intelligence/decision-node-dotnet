@@ -881,7 +881,7 @@ public sealed class SegmentOpening
     /// <summary>Its height, as a fraction of the picture's.</summary>
     public double Height { get; }
 
-    /// <summary>Its centre's offset from the middle of the picture, <c>[dx, dy]</c>, each from -1 to 1.</summary>
+    /// <summary>Its centroid minus the centre of the match's <see cref="SegmentInstance.Box"/>, <c>[dx, dy]</c>, as received.</summary>
     public SegmentPoint Offset { get; }
 
     /// <summary>Its share of the picture, from 0 to 1.</summary>
