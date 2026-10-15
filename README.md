@@ -251,12 +251,16 @@ To turn a video file into frames, use the `dn` command line: `dn truth "Does a p
 
 ## Boosters
 
-A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. Two boosters are available:
+A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. The boosters available include:
 
 | Booster | Reads | Tells the model |
 |---|---|---|
 | `age` | A picture of a person | How old the person is, with a range and a confidence (the largest face is read) |
 | `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
+| `bynn_depth` (Depth Vision, `Booster.BynnDepth`) | Any picture | The distance in meters to what is in the picture: the nearest obstacle straight ahead (the floor left out), seven directions from left to right, and a grid of up to 16 by 16 cells |
+| `bynn_segment` (Segment Vision, `Booster.BynnSegment`) | Any picture, and up to 4 phrases naming what to find | Each match's outline, box and centre, and with depth on, its distance and size in meters |
+
+Depth Vision's and Segment Vision's distances and sizes are estimates from one picture, for decisions and planning, never a safety stop.
 
 Name the boosters a request should use:
 
@@ -313,9 +317,53 @@ boosters: new Booster[]
 | `name` | `name`, the booster's name |
 | `images` | The ids of the request's images it reads; left out, it reads every image |
 | `require` | `true`: a booster that fails or does not answer in time fails the request with an `OverloadedError` (`booster_unavailable`), which is retried like any 529. Left out, the decision runs without that reading and `Evidence` says why |
-| `options` | The booster's settings; neither booster takes any yet |
+| `options` | The booster's settings, sent as given (below); `age` and `ai_generated` take none |
 
 A name alone is sent as the name (`"age"`), and so is `Booster.Of("age")` with no other argument; `Booster.Of(...)` with a setting is sent as an object, `{"name": "ai_generated", "images": ["c3d4"], "require": true}`; `Booster.FromJson(...)` takes the API's wire form as given. Up to 4 boosters go with a request, each once, in the order given, and the `boosters` field is left out when there are none. Boosters read images in every form (URL, inline or uploaded), every question sees every reading, and they go with `DecideAsync`, the helpers, `DecideManyAsync`, `CheckRequest` and batch lines (`BatchRequest.Boosters`). Sessions take no boosters. Names are not a closed list, so a booster added to the API works with this version; the library checks nothing about boosters before sending, because which boosters a workspace may use is the server's to know.
+
+Depth Vision and Segment Vision take these options, sent as given; nothing is checked before sending, and the API answers a value out of range or an unknown key with a `BadRequestError` (`api_usage_error`):
+
+| Booster | Option | Value |
+|---|---|---|
+| `bynn_depth` | `grid_size` | The grid's rows and columns, 2 to 16; default 8 |
+| `bynn_segment` | `prompt` | Required: what to find, one phrase as a string, or an array of 1 to 4 phrases of at most 120 characters each |
+| `bynn_segment` | `max_instances` | The most matches returned, 1 to 16; default 8 |
+| `bynn_segment` | `min_score` | The lowest score a match may have, 0 to 1; default 0.25 |
+| `bynn_segment` | `polygon_points` | The most points in an outline, 3 to 64; default 24 |
+| `bynn_segment` | `depth` | `true` for each match's distance and size in meters, read in the same call; default `true` |
+
+```csharp
+var d = await dn.DecideAsync(
+    state: "A drone lining up with a race gate.",
+    questions: new Dictionary<string, Question>
+    {
+        ["clear"] = Truth("Is the way through the gate clear?"),
+    },
+    images: new[] { Image.FromFile("f001", "frame.jpg") },
+    boosters: new Booster[]
+    {
+        Booster.Of(Booster.BynnDepth, options: new { grid_size = 8 }),
+        Booster.Of(Booster.BynnSegment, options: new { prompt = new[] { "gate", "landing pad" }, max_instances = 4 }),
+    });
+
+foreach (var reading in d.Evidence![Booster.BynnDepth].Results)
+{
+    if (reading is DepthReading depth)
+    {
+        Console.WriteLine($"{depth.Image}: {depth.Ahead?.ToString() ?? "nothing"} m straight ahead");
+    }
+}
+foreach (var reading in d.Evidence![Booster.BynnSegment].Results)
+{
+    if (reading is SegmentReading segment)
+    {
+        foreach (var match in segment.Instances)
+        {
+            Console.WriteLine($"{match.Label} {match.Score}: centre ({match.Centroid.X}, {match.Centroid.Y}), {match.Depth?.Median?.ToString() ?? "no distance"} m away");
+        }
+    }
+}
+```
 
 `Decision.Evidence` holds one `Evidence` per booster the request named, by name in the request's order, and is `null` when it named none. Each has `Version` (for example `age-v3`), `Status` (`ok`, `timeout`, `error` or `skipped` when none of the request's images is one it reads), `LatencyMs`, `BilledCalls` (the calls of that booster billed on this request) and `Results`, one entry per picture; a picture the booster did not read (it timed out or failed, or could not decode the picture) is an `UnknownReading` holding only its `image` (and `readable: false`), the status saying why:
 
@@ -323,6 +371,8 @@ A name alone is sent as the name (`"age"`), and so is `Booster.Of("age")` with n
 |---|---|
 | `AgeReading` | `Image`, `Faces`, and `AgeYears`, `Low`, `High`, `Confidence` (each `null` when `Faces` is 0) |
 | `AiGeneratedReading` | `Image`, `Generated` (the probability the picture was made by a generator), `Confidence`, `Method` (`inference` from the pixels, or `c2pa` from the file's Content Credentials), `TopGenerator` (`Name`, `Probability`; `null` unless the picture is likely generated), `C2paSigner` (`null` when the file has no Content Credentials), `C2pa` (`untrusted` when the file's Content Credentials validate but their signer is not trusted, else `null`) |
+| `DepthReading` | `Image`, `Ahead` (meters to the nearest obstacle straight ahead, the floor left out; `null` when none is found), `Directions` (always 7, left to right, each meters or `null`), `Ground` (whether a floor was found and left out; when `false`, `Ahead` and `Directions` include everything), `GridRows`, `GridCols`, `Grid` (meters, row by row from the top left), `DepthMin`, `DepthMax`, `DepthMedian` (meters), `Width`, `Height` (pixels) |
+| `SegmentReading` | `Image`, `Width`, `Height` (pixels), `Prompts` (the phrases as read), `Instances` (in the order received, empty when nothing was found), `DepthSource` (`bynn_depth`, or `null` with depth off), `AssumedHfovDeg` (the field of view the sizes assume, or `null`). Each `SegmentInstance` has `Label` (the phrase it matched), `Score`, `Box` (`X1`, `Y1`, `X2`, `Y2`), `Polygon` and `Centroid` (`SegmentPoint`s, `X` and `Y`), `Area` (its share of the picture), `Opening` (`null`, or the largest hole it encloses: `Polygon`, `Centroid`, `Width`, `Height`, `Offset` from the box's centre, `Area`), `Depth` (`null`, or `Median`, `OpeningMedian`, `OpeningRimMedian` in meters, each `null` when none) and `SizeM` (`null`, or `Width`, `Height` and `Opening` in meters). Coordinates are fractions of the picture from 0 to 1, from its top left |
 | `UnknownReading` | A reading of a booster this version does not know, or one with a missing or wrongly typed field, with its `Raw` fields; the decision does not fail |
 
 Every booster call billed is charged at that booster's price, listed on the [pricing page](https://decisionnode.com/docs/pricing#boosters), and drawn from your prepaid balance with the request's tokens; a booster that timed out or failed is free, and a refused request bills no booster call. The readings' tokens count as input tokens at the model's price.
@@ -331,7 +381,7 @@ Every booster call billed is charged at that booster's price, listed on the [pri
 |---|---|
 | `BadRequestError` `booster_unknown` | A name that is not a booster |
 | `BadRequestError` `booster_input_mismatch` | A booster that reads images on a request without any, or an `images` entry that is not an image of the request |
-| `BadRequestError` `api_usage_error` | A malformed `boosters` list: more than 4, a booster named twice, an unknown key in `options` (the reason is in `Reason`) |
+| `BadRequestError` `api_usage_error` | A malformed `boosters` list: more than 4, a booster named twice, an unknown key in `options` or a value out of its range (the reason is in `Reason`) |
 | `PermissionDeniedError` `booster_not_enabled` | The booster is turned off for your workspace |
 | `OverloadedError` `booster_unavailable` | A booster with `require: true` failed or did not answer in time; retried |
 

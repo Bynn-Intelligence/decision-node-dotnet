@@ -54,6 +54,27 @@ public sealed class Booster
     /// </summary>
     public const string Ocr = "ocr";
 
+    /// <summary>
+    /// The name <c>bynn_depth</c>, Depth Vision: the distance in meters to what is in a picture,
+    /// straight ahead, in seven directions from left to right and as a grid. Its one option,
+    /// <c>grid_size</c> (2 to 16, default 8), is sent as given. Its readings are
+    /// <see cref="DepthReading"/>s. The distances are estimates from one picture, for decisions
+    /// and planning, never a safety stop.
+    /// </summary>
+    public const string BynnDepth = "bynn_depth";
+
+    /// <summary>
+    /// The name <c>bynn_segment</c>, Segment Vision: finds what the request names in words, each
+    /// match's outline, box and centre, and with depth on its distance and size in meters. Its
+    /// options are sent as given: <c>prompt</c> (required: one phrase as a string, or an array of
+    /// 1 to 4 phrases of at most 120 characters each), <c>max_instances</c> (1 to 16, default 8),
+    /// <c>min_score</c> (0 to 1, default 0.25), <c>polygon_points</c> (3 to 64, default 24) and
+    /// <c>depth</c> (<c>true</c> or <c>false</c>, default <c>true</c>). Its readings are
+    /// <see cref="SegmentReading"/>s. The distances and sizes are estimates from one picture, for
+    /// decisions and planning, never a safety stop.
+    /// </summary>
+    public const string BynnSegment = "bynn_segment";
+
     private readonly JsonNode _wire;
 
     private Booster(JsonNode wire)
@@ -245,7 +266,8 @@ public sealed class Evidence
 /// <summary>
 /// One booster's reading of one image: an <see cref="AgeReading"/>, an
 /// <see cref="AiGeneratedReading"/>, an <see cref="OcrReading"/>, a <see cref="FaceDetectionReading"/>,
-/// a <see cref="FaceRecognitionReading"/> or, for a booster this version of the library does not know
+/// a <see cref="FaceRecognitionReading"/>, a <see cref="DepthReading"/>, a <see cref="SegmentReading"/> or,
+/// for a booster this version of the library does not know
 /// or a reading with a missing or wrongly typed field, an <see cref="UnknownReading"/> holding
 /// its raw fields. A reading never fails the decision. Numbers are passed through as received.
 /// </summary>
@@ -282,6 +304,8 @@ public abstract class Reading
                 DecisionNode.Booster.Ocr => OcrReading.Read(raw),
                 DecisionNode.Booster.FaceDetection => FaceDetectionReading.Read(raw),
                 DecisionNode.Booster.FaceRecognition => FaceRecognitionReading.Read(raw),
+                DecisionNode.Booster.BynnDepth => DepthReading.Read(raw),
+                DecisionNode.Booster.BynnSegment => SegmentReading.Read(raw),
                 _ => new UnknownReading(booster, raw),
             };
         }
@@ -332,6 +356,20 @@ public abstract class Reading
     /// <summary>A field that may be absent or <c>null</c>; present, it must be a string.</summary>
     private protected static string? OptionalText(JsonObject raw, string field) =>
         raw[field] is null ? null : Text(raw, field);
+
+    /// <summary>A <c>true</c> or <c>false</c>.</summary>
+    private protected static bool Flag(JsonObject raw, string field) =>
+        raw[field] is JsonValue v && v.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
+            ? v.GetValue<bool>()
+            : throw new MalformedReading();
+
+    /// <summary>An array, each entry read by <paramref name="read"/>.</summary>
+    private protected static IReadOnlyList<T> Items<T>(JsonNode? node, Func<JsonNode?, T> read) =>
+        node is JsonArray list ? list.Select(read).ToList() : throw new MalformedReading();
+
+    /// <summary>An entry of an array that must be a number.</summary>
+    private protected static double Number(JsonNode? node) =>
+        JsonValues.TryDouble(node, out var d) ? d : throw new MalformedReading();
 }
 
 /// <summary>
@@ -473,10 +511,7 @@ public sealed class OcrReading : Reading
         _ = Reading.Text(raw, "image");
         var text = Reading.Text(raw, "text");
         // text and truncated are always sent: a reading without either is malformed.
-        var truncated = raw["truncated"] is JsonValue v && v.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
-            ? v.GetValue<bool>()
-            : throw new MalformedReading();
-        return new OcrReading(raw, text, truncated);
+        return new OcrReading(raw, text, Flag(raw, "truncated"));
     }
 }
 
@@ -581,6 +616,308 @@ public sealed record FaceMatch(FaceBox Box, double Score, string Collection, str
 /// questions ask for normalized units); never converted or rounded.
 /// </summary>
 public sealed record FaceBox(double X1, double Y1, double X2, double Y2);
+
+/// <summary>
+/// A reading of the <c>bynn_depth</c> booster (Depth Vision): the distance in meters to what is in
+/// one picture, every number as received. The distances are estimates from one picture, for
+/// decisions and planning, never a safety stop.
+/// </summary>
+public sealed class DepthReading : Reading
+{
+    private DepthReading(
+        JsonObject raw, double? ahead, IReadOnlyList<double?> directions, bool ground, long gridRows, long gridCols,
+        IReadOnlyList<IReadOnlyList<double>> grid, double depthMin, double depthMax, double depthMedian, long width, long height)
+        : base(DecisionNode.Booster.BynnDepth, raw)
+    {
+        Ahead = ahead;
+        Directions = directions;
+        Ground = ground;
+        GridRows = gridRows;
+        GridCols = gridCols;
+        Grid = grid;
+        DepthMin = depthMin;
+        DepthMax = depthMax;
+        DepthMedian = depthMedian;
+        Width = width;
+        Height = height;
+    }
+
+    /// <summary>
+    /// The meters to the nearest obstacle straight ahead, in the middle third of the picture's
+    /// width, the floor or ground left out when <see cref="Ground"/> is <c>true</c>; <c>null</c>
+    /// when none was found (open space or sky).
+    /// </summary>
+    public double? Ahead { get; }
+
+    /// <summary>
+    /// The same reading in seven equal vertical strips of the picture, left to right: always seven
+    /// entries, each in meters, or <c>null</c> when that strip has none.
+    /// </summary>
+    public IReadOnlyList<double?> Directions { get; }
+
+    /// <summary>
+    /// <c>true</c> when a floor or ground was found and left out of <see cref="Ahead"/> and
+    /// <see cref="Directions"/>; <c>false</c> when none was, and they include everything.
+    /// </summary>
+    public bool Ground { get; }
+
+    /// <summary>The grid's rows, the request's <c>grid_size</c>.</summary>
+    public long GridRows { get; }
+
+    /// <summary>The grid's columns, the request's <c>grid_size</c>.</summary>
+    public long GridCols { get; }
+
+    /// <summary>The meters to each cell of the grid, row by row from the top left, as received.</summary>
+    public IReadOnlyList<IReadOnlyList<double>> Grid { get; }
+
+    /// <summary>The nearest distance in the picture, in meters.</summary>
+    public double DepthMin { get; }
+
+    /// <summary>The farthest distance in the picture, in meters.</summary>
+    public double DepthMax { get; }
+
+    /// <summary>The median distance in the picture, in meters.</summary>
+    public double DepthMedian { get; }
+
+    /// <summary>The picture's width in pixels.</summary>
+    public long Width { get; }
+
+    /// <summary>The picture's height in pixels.</summary>
+    public long Height { get; }
+
+    internal static DepthReading Read(JsonObject raw)
+    {
+        _ = Text(raw, "image");
+        var directions = Items<double?>(raw["directions"], d => d is null ? null : Number(d));
+        if (directions.Count != 7)
+        {
+            throw new MalformedReading();
+        }
+        return new DepthReading(
+            raw, OptionalNumber(raw, "ahead"), directions, Flag(raw, "ground"), Count(raw, "grid_rows"), Count(raw, "grid_cols"),
+            Items(raw["grid"], row => Items(row, Number)),
+            Number(raw, "depth_min"), Number(raw, "depth_max"), Number(raw, "depth_median"), Count(raw, "width"), Count(raw, "height"));
+    }
+}
+
+/// <summary>
+/// A reading of the <c>bynn_segment</c> booster (Segment Vision): the matches of the phrases the
+/// request named, found in one picture, every number as received. Coordinates are fractions of the
+/// picture from 0 to 1, measured from its top left. The distances and sizes are estimates from one
+/// picture, for decisions and planning, never a safety stop.
+/// </summary>
+public sealed class SegmentReading : Reading
+{
+    private SegmentReading(
+        JsonObject raw, long width, long height, IReadOnlyList<string> prompts, IReadOnlyList<SegmentInstance> instances,
+        string? depthSource, double? assumedHfovDeg)
+        : base(DecisionNode.Booster.BynnSegment, raw)
+    {
+        Width = width;
+        Height = height;
+        Prompts = prompts;
+        Instances = instances;
+        DepthSource = depthSource;
+        AssumedHfovDeg = assumedHfovDeg;
+    }
+
+    /// <summary>The picture's width in pixels.</summary>
+    public long Width { get; }
+
+    /// <summary>The picture's height in pixels.</summary>
+    public long Height { get; }
+
+    /// <summary>The phrases searched for, as read, in the order received.</summary>
+    public IReadOnlyList<string> Prompts { get; }
+
+    /// <summary>The matches found, in the order received; empty when nothing was found.</summary>
+    public IReadOnlyList<SegmentInstance> Instances { get; }
+
+    /// <summary>
+    /// Where the distances come from, <c>bynn_depth</c>; <c>null</c> with depth off or unavailable,
+    /// or when absent.
+    /// </summary>
+    public string? DepthSource { get; }
+
+    /// <summary>The horizontal field of view, in degrees, that the sizes in meters assume; <c>null</c> when absent.</summary>
+    public double? AssumedHfovDeg { get; }
+
+    internal static SegmentReading Read(JsonObject raw)
+    {
+        _ = Text(raw, "image");
+        return new SegmentReading(
+            raw, Count(raw, "width"), Count(raw, "height"),
+            Items(raw["prompts"], p => JsonValues.AsString(p) ?? throw new MalformedReading()),
+            List(raw, "instances", Instance),
+            OptionalText(raw, "depth_source"), OptionalNumber(raw, "assumed_hfov_deg"));
+    }
+
+    private static SegmentInstance Instance(JsonObject i) => new(
+        Text(i, "label"), Number(i, "score"), Corners(i["box"]), Outline(i["polygon"]), Number(i, "area"), Point(i["centroid"]),
+        i["opening"] switch
+        {
+            null => null,
+            JsonObject o => new SegmentOpening(
+                Outline(o["polygon"]), Point(o["centroid"]), Number(o, "width"), Number(o, "height"), Point(o["offset"]), Number(o, "area")),
+            _ => throw new MalformedReading(),
+        },
+        i["depth"] switch
+        {
+            null => null,
+            JsonObject d => new SegmentDepth(OptionalNumber(d, "median"), OptionalNumber(d, "opening_median"), OptionalNumber(d, "opening_rim_median")),
+            _ => throw new MalformedReading(),
+        },
+        i["size_m"] switch
+        {
+            null => null,
+            JsonObject s => new SegmentSize(
+                Number(s, "width"),
+                Number(s, "height"),
+                s["opening"] switch
+                {
+                    null => null,
+                    JsonObject so => new SegmentOpeningSize(Number(so, "width"), Number(so, "height")),
+                    _ => throw new MalformedReading(),
+                }),
+            _ => throw new MalformedReading(),
+        });
+
+    /// <summary>Exactly <paramref name="count"/> numbers.</summary>
+    private static IReadOnlyList<double> Numbers(JsonNode? node, int count)
+    {
+        var numbers = Items(node, Number);
+        return numbers.Count == count ? numbers : throw new MalformedReading();
+    }
+
+    private static SegmentPoint Point(JsonNode? node)
+    {
+        var p = Numbers(node, 2);
+        return new SegmentPoint(p[0], p[1]);
+    }
+
+    private static SegmentBox Corners(JsonNode? node)
+    {
+        var b = Numbers(node, 4);
+        return new SegmentBox(b[0], b[1], b[2], b[3]);
+    }
+
+    private static IReadOnlyList<SegmentPoint> Outline(JsonNode? node) => Items(node, Point);
+}
+
+/// <summary>
+/// One match of a <see cref="SegmentReading"/>, every number as received. Coordinates are
+/// fractions of the picture from 0 to 1, measured from its top left.
+/// </summary>
+public sealed class SegmentInstance
+{
+    internal SegmentInstance(
+        string label, double score, SegmentBox box, IReadOnlyList<SegmentPoint> polygon, double area, SegmentPoint centroid,
+        SegmentOpening? opening, SegmentDepth? depth, SegmentSize? sizeM)
+    {
+        Label = label;
+        Score = score;
+        Box = box;
+        Polygon = polygon;
+        Area = area;
+        Centroid = centroid;
+        Opening = opening;
+        Depth = depth;
+        SizeM = sizeM;
+    }
+
+    /// <summary>The phrase it matched, one of the reading's <see cref="SegmentReading.Prompts"/>.</summary>
+    public string Label { get; }
+
+    /// <summary>How well it matches the phrase, from 0 to 1.</summary>
+    public double Score { get; }
+
+    /// <summary>Its box, <c>[x1, y1, x2, y2]</c>.</summary>
+    public SegmentBox Box { get; }
+
+    /// <summary>Its outline, the points in the order received.</summary>
+    public IReadOnlyList<SegmentPoint> Polygon { get; }
+
+    /// <summary>Its share of the picture, from 0 to 1.</summary>
+    public double Area { get; }
+
+    /// <summary>Its centre, <c>[x, y]</c>.</summary>
+    public SegmentPoint Centroid { get; }
+
+    /// <summary>The largest hole it encloses, a gate's opening for one; <c>null</c> when it has none.</summary>
+    public SegmentOpening? Opening { get; }
+
+    /// <summary>Its distances in meters; <c>null</c> with depth off, or when absent.</summary>
+    public SegmentDepth? Depth { get; }
+
+    /// <summary>Its size in meters (<c>size_m</c>); <c>null</c> with depth off, or when absent.</summary>
+    public SegmentSize? SizeM { get; }
+}
+
+/// <summary>
+/// The largest hole a <see cref="SegmentInstance"/> encloses, every number as received, as
+/// fractions of the picture.
+/// </summary>
+public sealed class SegmentOpening
+{
+    internal SegmentOpening(IReadOnlyList<SegmentPoint> polygon, SegmentPoint centroid, double width, double height, SegmentPoint offset, double area)
+    {
+        Polygon = polygon;
+        Centroid = centroid;
+        Width = width;
+        Height = height;
+        Offset = offset;
+        Area = area;
+    }
+
+    /// <summary>Its outline, the points in the order received.</summary>
+    public IReadOnlyList<SegmentPoint> Polygon { get; }
+
+    /// <summary>Its centre, <c>[x, y]</c>.</summary>
+    public SegmentPoint Centroid { get; }
+
+    /// <summary>Its width, as a fraction of the picture's.</summary>
+    public double Width { get; }
+
+    /// <summary>Its height, as a fraction of the picture's.</summary>
+    public double Height { get; }
+
+    /// <summary>Its centre's offset from the centre of the instance's box, <c>[dx, dy]</c>, each from -1 to 1.</summary>
+    public SegmentPoint Offset { get; }
+
+    /// <summary>Its share of the picture, from 0 to 1.</summary>
+    public double Area { get; }
+}
+
+/// <summary>A point of a <see cref="SegmentReading"/>, <c>[x, y]</c>, as received.</summary>
+/// <param name="X">From the left, as a fraction of the picture's width.</param>
+/// <param name="Y">From the top, as a fraction of the picture's height.</param>
+public sealed record SegmentPoint(double X, double Y);
+
+/// <summary>A <see cref="SegmentInstance"/>'s box, <c>[x1, y1, x2, y2]</c>, as received: its top-left and bottom-right corners, as fractions of the picture.</summary>
+public sealed record SegmentBox(double X1, double Y1, double X2, double Y2);
+
+/// <summary>
+/// A <see cref="SegmentInstance"/>'s distances in meters, each <c>null</c> when none was read.
+/// Estimates from one picture, for decisions and planning, never a safety stop.
+/// </summary>
+/// <param name="Median">The median distance to the instance.</param>
+/// <param name="OpeningMedian">The median distance through its opening.</param>
+/// <param name="OpeningRimMedian">The median distance to its opening's rim.</param>
+public sealed record SegmentDepth(double? Median, double? OpeningMedian, double? OpeningRimMedian);
+
+/// <summary>
+/// A <see cref="SegmentInstance"/>'s size in meters, as received. Estimates from one picture, for
+/// decisions and planning, never a safety stop.
+/// </summary>
+/// <param name="Width">Its width in meters.</param>
+/// <param name="Height">Its height in meters.</param>
+/// <param name="Opening">Its opening's size in meters; <c>null</c> when it has none.</param>
+public sealed record SegmentSize(double Width, double Height, SegmentOpeningSize? Opening);
+
+/// <summary>The size in meters of a <see cref="SegmentInstance"/>'s opening, as received.</summary>
+/// <param name="Width">Its width in meters.</param>
+/// <param name="Height">Its height in meters.</param>
+public sealed record SegmentOpeningSize(double Width, double Height);
 
 /// <summary>The likeliest image generator of an <see cref="AiGeneratedReading"/>.</summary>
 /// <param name="Name">The generator's name, as received.</param>
