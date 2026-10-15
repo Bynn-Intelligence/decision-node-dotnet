@@ -251,12 +251,15 @@ To turn a video file into frames, use the `dn` command line: `dn truth "Does a p
 
 ## Boosters
 
-A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. The boosters available include:
+A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. Seven boosters are available:
 
 | Booster | Reads | Tells the model |
 |---|---|---|
 | `age` | A picture of a person | How old the person is, with a range and a confidence (the largest face is read) |
 | `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
+| `face_detection` (`Booster.FaceDetection`) | Any picture | How many faces it shows and where, a box and a confidence per face; a picture with no face reads 0 faces |
+| `face_recognition` (`Booster.FaceRecognition`) | A picture of a person | Whether a face matches an item of the collection the request names, your workspace's own (`dn.Collections`) or `celebrities`: per match a box, a score and the item's reference, with its label or the person's name |
+| `ocr` (`Booster.Ocr`) | Any picture | The text it shows, all of it by default, or what a `prompt` asks for: a formula in LaTeX, a table in HTML or Markdown, the fields of a JSON schema the prompt gives. Full support for English and Chinese; other languages need a prompt that names them |
 | `bynn_depth` (Depth Vision, `Booster.BynnDepth`) | Any picture | The distance in meters to what is in the picture: the nearest obstacle straight ahead (the floor left out), seven directions from left to right, and a grid of up to 16 by 16 cells |
 | `bynn_segment` (Segment Vision, `Booster.BynnSegment`) | Any picture, and up to 4 phrases naming what to find | Each match's outline, box and centre, and with depth on, its distance and size in meters |
 
@@ -321,10 +324,13 @@ boosters: new Booster[]
 
 A name alone is sent as the name (`"age"`), and so is `Booster.Of("age")` with no other argument; `Booster.Of(...)` with a setting is sent as an object, `{"name": "ai_generated", "images": ["c3d4"], "require": true}`; `Booster.FromJson(...)` takes the API's wire form as given. Up to 4 boosters go with a request, each once, in the order given, and the `boosters` field is left out when there are none. Boosters read images in every form (URL, inline or uploaded), every question sees every reading, and they go with `DecideAsync`, the helpers, `DecideManyAsync`, `CheckRequest` and batch lines (`BatchRequest.Boosters`). Sessions take no boosters. Names are not a closed list, so a booster added to the API works with this version; the library checks nothing about boosters before sending, because which boosters a workspace may use is the server's to know.
 
-Depth Vision and Segment Vision take these options, sent as given; nothing is checked before sending, and the API answers a value out of range or an unknown key with a `BadRequestError` (`api_usage_error`):
+The options each booster takes, sent as given; `age`, `ai_generated` and `face_detection` take none. Nothing is checked before sending, and the API answers a value out of range or an unknown key with a `BadRequestError` (`api_usage_error`):
 
 | Booster | Option | Value |
 |---|---|---|
+| `face_recognition` | `collection` | Required: the id of one of your workspace's own face collections, or `celebrities` (a match gives the person's name). An unknown collection is a `NotFoundError` (`collection_not_found`) |
+| `face_recognition` | `threshold` | The lowest score a match may have, 0 to 1; default 0.5 |
+| `ocr` | `prompt` | What to read, a string of at most 2,000 characters. Left out, `"Text Recognition:"` (all visible text, plain); `"Formula Recognition:"` and `"Table Recognition:"` are the other built-in prompts and give the most predictable output; a custom instruction or a JSON schema is allowed |
 | `bynn_depth` | `grid_size` | The grid's rows and columns, 2 to 16; default 8 |
 | `bynn_segment` | `prompt` | Required: what to find, one phrase as a string, or an array of 1 to 4 phrases of at most 120 characters each |
 | `bynn_segment` | `max_instances` | The most matches returned, 1 to 16; default 8 |
@@ -371,6 +377,9 @@ foreach (var reading in d.Evidence![Booster.BynnSegment].Results)
 |---|---|
 | `AgeReading` | `Image`, `Faces`, and `AgeYears`, `Low`, `High`, `Confidence` (each `null` when `Faces` is 0) |
 | `AiGeneratedReading` | `Image`, `Generated` (the probability the picture was made by a generator), `Confidence`, `Method` (`inference` from the pixels, or `c2pa` from the file's Content Credentials), `TopGenerator` (`Name`, `Probability`; `null` unless the picture is likely generated), `C2paSigner` (`null` when the file has no Content Credentials), `C2pa` (`untrusted` when the file's Content Credentials validate but their signer is not trusted, else `null`) |
+| `FaceDetectionReading` | `Image`, `Faces` (the count) and `Detections`, each a `FaceDetection` with `Box` (`X1`, `Y1`, `X2`, `Y2`, pixels, or fractions when every place question asks for normalized units) and `Confidence` |
+| `FaceRecognitionReading` | `Image`, `Faces` (the faces searched), `CollectionName` (an own collection's name, else `null`) and `Matches`, by score, each a `FaceMatch` with `Box`, `Score`, `Collection`, `Reference`, `Name` (a celebrity's), `Label` (an own item's), `CollectionName` and `Metadata` (an own item's, else `null`) |
+| `OcrReading` | `Image`, `Text` (the reading in the format the prompt asks for, empty when the picture shows no text) and `Truncated` (`true` when the reading was too long for the request, so the model read it cut at its end; `Text` stays whole) |
 | `DepthReading` | `Image`, `Ahead` (meters to the nearest obstacle straight ahead, the floor left out; `null` when none is found), `Directions` (always 7, left to right, each meters or `null`), `Ground` (whether a floor was found and left out; when `false`, `Ahead` and `Directions` include everything), `GridRows`, `GridCols`, `Grid` (meters, row by row from the top left), `DepthMin`, `DepthMax`, `DepthMedian` (meters), `Width`, `Height` (pixels) |
 | `SegmentReading` | `Image`, `Width`, `Height` (pixels), `Prompts` (the phrases as read), `Instances` (in the order received, empty when nothing was found), `DepthSource` (`bynn_depth`, or `null` with depth off), `AssumedHfovDeg` (the field of view the sizes assume, or `null`). Each `SegmentInstance` has `Label` (the phrase it matched), `Score`, `Box` (`X1`, `Y1`, `X2`, `Y2`), `Polygon` and `Centroid` (`SegmentPoint`s, `X` and `Y`), `Area` (its share of the picture), `Opening` (`null`, or the largest hole it encloses: `Polygon`, `Centroid`, `Width`, `Height`, `Offset` from the box's centre, `Area`), `Depth` (`null`, or `Median`, `OpeningMedian`, `OpeningRimMedian` in meters, each `null` when none) and `SizeM` (`null`, or `Width`, `Height` and `Opening` in meters). Coordinates are fractions of the picture from 0 to 1, from its top left |
 | `UnknownReading` | A reading of a booster this version does not know, or one with a missing or wrongly typed field, with its `Raw` fields; the decision does not fail |
