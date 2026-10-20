@@ -298,7 +298,7 @@ public class KnowledgeTests
         await dn.Collections.GetItemAsync(Col, ItemId, includeText: true);
         await dn.Collections.ListChunksAsync(Col, ItemId);
         await dn.Collections.ListChunksAsync(Col, ItemId, offset: 20, limit: 10);
-        await dn.Collections.DeleteFailedItemsAsync(Col);
+        await dn.Collections.DeleteFailedAsync(Col);
         Assert.Equal(new[]
         {
             $"GET /v1/collections/{Col}/items/{ItemId}",

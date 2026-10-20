@@ -217,6 +217,7 @@ public static class Driver
                 Text("item_id"),
                 Number("timeout") is { } wt ? TimeSpan.FromSeconds(wt) : null,
                 Number("poll_interval") is { } wp ? TimeSpan.FromSeconds(wp) : null)),
+            "collections.delete_failed" => Wrap(client.Collections.DeleteFailedAsync(Text("collection_id")!)),
             "upload_documents" => Wrap(client.UploadDocumentsAsync(((JsonArray)args["documents"]!).Select(d => DocumentOf(d, ctx)).ToList())),
             "collections.list" => Wrap(client.Collections.ListAsync()),
             "collections.get" => Wrap(client.Collections.GetAsync(Text("collection_id")!)),

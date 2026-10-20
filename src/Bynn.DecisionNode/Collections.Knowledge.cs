@@ -119,7 +119,7 @@ public sealed partial class CollectionsClient
     /// so retried as any read. A failed document counts toward nothing, but stays listed with its
     /// reason until it is deleted.
     /// </summary>
-    public Task<JsonObject> DeleteFailedItemsAsync(string collectionId, CancellationToken cancellationToken = default) =>
+    public Task<JsonObject> DeleteFailedAsync(string collectionId, CancellationToken cancellationToken = default) =>
         ObjectAsync(HttpMethod.Delete, Path(collectionId) + "/items?status=failed", null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);
 
     /// <summary>
