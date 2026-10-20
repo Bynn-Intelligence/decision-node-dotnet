@@ -21,7 +21,7 @@ Implements version 1.4 of the DecisionNode SDK specification (`SpecVersion` is `
 
 - A `529` whose `details.reason` is `ingestion_delayed` is raised at once, never retried: ingestion has been held up, and the caller decides whether to wait.
 - `CreateAsync` takes `scopeKey` before the `CancellationToken`; callers that pass the token by position pass it by name.
-- CI runs conformance suite 1.23.
+- CI runs conformance suite 1.25.
 
 ## [0.3.0] - Unreleased
 

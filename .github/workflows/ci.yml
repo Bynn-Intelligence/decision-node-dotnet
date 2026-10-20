@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 env:
-  # The conformance suite commit this library is tested against (suite 1.23, tag v1.23, for
+  # The conformance suite commit this library is tested against (suite 1.25, tag v1.25, for
   # specification 1.4). The one place it is set; move it forward deliberately, never to a branch.
-  DECISIONNODE_CONFORMANCE_REF: 4e0a3f91823a21e23156582654cb8db901138ae1
+  DECISIONNODE_CONFORMANCE_REF: a0ca11fe8f08fc82fb07afa3213fad2488d51220
 
 jobs:
   test:
