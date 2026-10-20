@@ -2,6 +2,27 @@
 
 All notable changes to this library are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - Unreleased
+
+Implements version 1.4 of the DecisionNode SDK specification (`SpecVersion` is `"1.4"`): knowledge.
+
+### Added
+
+- Knowledge bases: `dn.Collections.CreateAsync(name, "text", scopeKey)` creates a collection of type `text`, its `scope_key` sent only when given. A type other than `face` or `text` and a scope key not of `^[a-z0-9_]{1,40}$` are the API's `ValidationError` before anything is sent. Collections and items stay `JsonObject`s as sent, a text collection's counts, version and pinned load and a document's status, stage, progress, file and version included.
+- Documents: `Document.FromText(text, format)`, `Document.FromFile(path, contentType, filename)`, `Document.FromBytes(data, contentType, filename)`, `Document.FromStream(stream, contentType, filename)` and `Document.FromUploadId(uploadId)`. `AddDocumentAsync` (`POST .../items`) and `ReplaceDocumentAsync` (`PUT .../items/{itemId}`) take the document with `title`, `reference`, `pinned`, `pinRank`, `label`, `metadata` and `wait` (`?wait=true`, 20 seconds an attempt unless a timeout was set), each sent only when given, with an `Idempotency-Key` the same on every attempt. Text goes inline; a text or Markdown file under the inline threshold that is UTF-8 with no NUL goes inline, titled by its file name's stem; every other file is uploaded with `POST /v1/uploads` and the knowledge purpose (`purpose`, `content_type`, `byte_size`, `checksum`, `sha256`, `filename`), its `PUT` allowed 120 seconds an attempt unless `UploadTimeout` was set, then named by `upload_id`. The content type comes from the argument, the file name's extension or the first bytes. A stale reference to an upload the call placed is uploaded again and sent once more with a new key; `upload_purpose_mismatch` is never uploaded again.
+- `UpdateItemAsync` takes `CollectionItemUpdate.Pinned`, `PinRank` and `Title`. `GetItemAsync(collectionId, itemId, includeText)`, `ListChunksAsync(collectionId, itemId, offset, limit)` and `DeleteFailedItemsAsync(collectionId)` (`DELETE .../items?status=failed`).
+- `dn.UploadDocumentsAsync(documents)`: 1 to 16 documents uploaded ahead of time, one `upload_id` each, for `Document.FromUploadId`.
+- `WaitUntilReadyAsync(collectionId, itemId, timeout, pollInterval, cancellationToken)`: polls an item until it is `ready` or `failed` and returns it, or a collection until nothing is queued or processing; the first read at once, then `pollInterval` (default 1 second) growing 1.5 times a read up to 10 seconds, or a longer `Retry-After`; `TimeoutException` past `timeout` (default 300 seconds). A poll interval under 0.1 seconds or a timeout not above zero is an `ArgumentOutOfRangeException` before anything is sent.
+- `SearchAsync(collectionId, query, scope, match, filter, topK, pinned, maxTokens)` (`POST .../search`), each argument sent only when given, returning a `KnowledgeReading`.
+- The `knowledge` booster: `Booster.Knowledge(collection, query, scope, match, filter, topK, maxTokens, pinned, minScore, includeText, require)`, every option sent only when given and as given, `require` only when `true`, and `Booster.KnowledgeName`. Its reading is a `KnowledgeReading` (`Collection`, `CollectionName`, `Corpus`, `Query`, `Budget`, `Scope`, `Warnings`, `Passages`, `Omitted`, `PendingItems`, `Search`, `Truncated`) with `KnowledgePassage`s (`N`, `Pinned`, `Item`, `Chunk`, `ByteStart`, `ByteEnd`, `Reference`, `Title`, `Heading`, `Tokens`, `Score`, `Lexical`, `Rendered`, `Text`); a reading or passage with a required field missing or of the wrong type is an `UnknownReading`.
+- Local checks for documents, raised as the API answers them before anything is sent: a title not 1 to 200 characters once trimmed or missing, an empty text, a format other than `markdown` or `text`, a pin rank outside 0 to 1,000, and the text route's words for a reference and a label (`ValidationError`); a file that is empty, over 50 MB, or of a type that is not a document's or cannot be told (`BadRequestError` `api_usage_error`).
+
+### Changed
+
+- A `529` whose `details.reason` is `ingestion_delayed` is raised at once, never retried: ingestion has been held up, and the caller decides whether to wait.
+- `CreateAsync` takes `scopeKey` before the `CancellationToken`; callers that pass the token by position pass it by name.
+- CI runs conformance suite 1.23.
+
 ## [0.3.0] - Unreleased
 
 Implements version 1.3 of the DecisionNode SDK specification (`SpecVersion` is `"1.3"`): boosters and fine-tuned model names.

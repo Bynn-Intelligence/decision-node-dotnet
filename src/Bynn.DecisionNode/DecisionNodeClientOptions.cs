@@ -24,9 +24,9 @@ public sealed class DecisionNodeClientOptions
     public TimeSpan? Timeout { get; set; }
 
     /// <summary>
-    /// The time allowed for each attempt of an image's storage <c>PUT</c>, apart from
-    /// <see cref="Timeout"/>: a 10 MB image on a slow uplink needs more than an API call.
-    /// Above zero; default 60 seconds.
+    /// The time allowed for each attempt of a storage <c>PUT</c>, apart from
+    /// <see cref="Timeout"/>: a 10 MB image or a 50 MB document on a slow uplink needs more than
+    /// an API call. Above zero; default 60 seconds for an image and 120 seconds for a document.
     /// </summary>
     public TimeSpan? UploadTimeout { get; set; }
 
@@ -36,8 +36,9 @@ public sealed class DecisionNodeClientOptions
     /// <summary>
     /// Local image bytes in one request (or one session frame, or one batch line) that
     /// together total under this many bytes go inline as base64; at or above it they are
-    /// uploaded once and sent by <c>upload_id</c>. 0 or more; default
-    /// <see cref="DecisionNodeClient.DefaultInlineThreshold"/> (524,288). 0 uploads every local image.
+    /// uploaded once and sent by <c>upload_id</c>. A text or Markdown document file under it
+    /// goes inline as text; at or above it, it is uploaded. 0 or more; default
+    /// <see cref="DecisionNodeClient.DefaultInlineThreshold"/> (524,288). 0 uploads every local image and file.
     /// </summary>
     public int? InlineThreshold { get; set; }
 

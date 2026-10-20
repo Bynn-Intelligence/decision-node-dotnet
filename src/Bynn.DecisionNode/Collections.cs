@@ -5,15 +5,19 @@ using Bynn.DecisionNode.Internal;
 namespace Bynn.DecisionNode;
 
 /// <summary>
-/// A workspace's collections of faces, and the public collections it may use, which the
-/// <c>face_recognition</c> booster searches. Every call returns the API's object exactly as
-/// sent. <see cref="CreateAsync"/> and <see cref="EnrollAsync"/> send an <c>Idempotency-Key</c>,
-/// a new one per call and the same on every attempt of it, so the API creates, enrolls and bills
-/// once however often the call is tried; they are retried as any call, and also on a <c>409</c>
-/// <c>idempotency_in_progress</c>. A <c>409</c> <c>idempotency_key_reused</c> is thrown as the
-/// base <see cref="DecisionNodeError"/>. The reads and deletes carry no key.
+/// A workspace's collections: of faces (type <c>face</c>), with the public collections it may
+/// use, which the <c>face_recognition</c> booster searches; and of documents (type <c>text</c>,
+/// a knowledge base), which the <c>knowledge</c> booster reads. Every call returns the API's
+/// object exactly as sent; one object serves both types, told apart by its <c>type</c>.
+/// <see cref="CreateAsync"/>, <see cref="EnrollAsync"/>, <see cref="AddDocumentAsync"/>,
+/// <see cref="ReplaceDocumentAsync"/> and <see cref="UpdateItemAsync"/> send an
+/// <c>Idempotency-Key</c>, a new one per call and the same on every attempt of it, so the API
+/// creates, enrolls, ingests and bills once however often the call is tried; they are retried as
+/// any call, and also on a <c>409</c> <c>idempotency_in_progress</c>. A <c>409</c>
+/// <c>idempotency_key_reused</c> is thrown as the base <see cref="DecisionNodeError"/>. The reads
+/// and deletes carry no key.
 /// </summary>
-public sealed class CollectionsClient
+public sealed partial class CollectionsClient
 {
     private readonly DecisionNodeClient _client;
 
@@ -24,13 +28,22 @@ public sealed class CollectionsClient
 
     /// <summary>Creates a collection (<c>POST /v1/collections</c>).</summary>
     /// <param name="name">The collection's name, 1 to 80 characters.</param>
-    /// <param name="type">The kind of thing it holds; <c>face</c>, the one kind there is.</param>
+    /// <param name="type">What it holds: <c>face</c> (the default) or <c>text</c>, a knowledge base of documents.</param>
+    /// <param name="scopeKey">
+    /// A knowledge base's scope key, 1 to 40 of a-z, 0-9 and _, such as <c>mission</c>: the one
+    /// metadata key whose value scopes a document to, say, one mission, named by the booster's
+    /// <c>scope</c>. Fixed for the collection's life; sent only when given, and only taken with <c>text</c>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the call.</param>
-    /// <exception cref="ValidationError">A type other than <c>face</c>, or a name not 1 to 80 characters; nothing is sent.</exception>
-    public async Task<JsonObject> CreateAsync(string name, string type = "face", CancellationToken cancellationToken = default)
+    /// <exception cref="ValidationError">A type other than <c>face</c> or <c>text</c>, a name not 1 to 80 characters, or a scope key not of its pattern; nothing is sent.</exception>
+    public async Task<JsonObject> CreateAsync(string name, string type = "face", string? scopeKey = null, CancellationToken cancellationToken = default)
     {
-        LocalChecks.CollectionCreate(name, type);
+        LocalChecks.CollectionCreate(name, type, scopeKey);
         var body = new JsonObject { ["type"] = type, ["name"] = name };
+        if (scopeKey is not null)
+        {
+            body["scope_key"] = scopeKey;
+        }
         return await ObjectAsync(HttpMethod.Post, "/v1/collections", body, DecisionNodeClient.RetryPolicy.Idempotent, cancellationToken, NewKey()).ConfigureAwait(false);
     }
 
@@ -52,7 +65,12 @@ public sealed class CollectionsClient
     public Task<JsonObject> GetAsync(string collectionId, CancellationToken cancellationToken = default) =>
         ObjectAsync(HttpMethod.Get, Path(collectionId), null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);
 
-    /// <summary>Deletes a collection and its items (<c>DELETE /v1/collections/{id}</c>).</summary>
+    /// <summary>
+    /// Deletes a collection and its items (<c>DELETE /v1/collections/{id}</c>). A knowledge base
+    /// answers <c>{"id", "deleted": true}</c> once purged within 10 seconds, else
+    /// <c>{"id", "status": "purging"}</c> while the purge finishes in the background; both are
+    /// success, returned as sent, and the purge is not polled.
+    /// </summary>
     public Task<JsonObject> DeleteAsync(string collectionId, CancellationToken cancellationToken = default) =>
         ObjectAsync(HttpMethod.Delete, Path(collectionId), null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);
 
@@ -126,9 +144,11 @@ public sealed class CollectionsClient
     /// <summary>
     /// Changes an item (<c>PATCH /v1/collections/{id}/items/{itemId}</c>), sending only the fields
     /// <paramref name="update"/> gives, and returns the item as sent. It carries an
-    /// <c>Idempotency-Key</c> and retries as <see cref="EnrollAsync"/> does.
+    /// <c>Idempotency-Key</c> and retries as <see cref="EnrollAsync"/> does. A document's
+    /// reference, label, metadata, pin and pin rank apply at once, never re-embedded or billed;
+    /// a new title makes a new version (the API answers <c>202</c>).
     /// </summary>
-    /// <exception cref="ValidationError">Nothing to change, or a reference, label or metadata out of its bounds; nothing is sent.</exception>
+    /// <exception cref="ValidationError">Nothing to change, or a reference, label, metadata, pin rank or title out of its bounds; nothing is sent.</exception>
     public async Task<JsonObject> UpdateItemAsync(string collectionId, string itemId, CollectionItemUpdate update, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(update);
@@ -137,7 +157,7 @@ public sealed class CollectionsClient
             throw new ArgumentException("give Label or ClearLabel, not both", nameof(update));
         }
         var labelGiven = update.Label is not null || update.ClearLabel;
-        LocalChecks.CollectionUpdate(update.Reference, labelGiven, update.Label, update.Metadata);
+        LocalChecks.CollectionUpdate(update.Reference, labelGiven, update.Label, update.Metadata, update.Pinned, update.PinRank, update.Title);
         var body = new JsonObject();
         if (update.Reference is not null)
         {
@@ -151,13 +171,25 @@ public sealed class CollectionsClient
         {
             body["metadata"] = update.Metadata.DeepClone();
         }
-        var path = Path(collectionId) + "/items/" + Uri.EscapeDataString(itemId);
+        if (update.Pinned is { } pinned)
+        {
+            body["pinned"] = pinned;
+        }
+        if (update.PinRank is { } pinRank)
+        {
+            body["pin_rank"] = pinRank;
+        }
+        if (update.Title is not null)
+        {
+            body["title"] = update.Title;
+        }
+        var path = ItemPath(collectionId, itemId);
         return await ObjectAsync(HttpMethod.Patch, path, body, DecisionNodeClient.RetryPolicy.Idempotent, cancellationToken, NewKey()).ConfigureAwait(false);
     }
 
-    /// <summary>Deletes one item (<c>DELETE /v1/collections/{id}/items/{itemId}</c>).</summary>
+    /// <summary>Deletes one item (<c>DELETE /v1/collections/{id}/items/{itemId}</c>): a document's text and chunks go at once.</summary>
     public Task<JsonObject> DeleteItemAsync(string collectionId, string itemId, CancellationToken cancellationToken = default) =>
-        ObjectAsync(HttpMethod.Delete, Path(collectionId) + "/items/" + Uri.EscapeDataString(itemId), null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);
+        ObjectAsync(HttpMethod.Delete, ItemPath(collectionId, itemId), null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);
 
     private static string Path(string collectionId)
     {
@@ -165,10 +197,16 @@ public sealed class CollectionsClient
         return "/v1/collections/" + Uri.EscapeDataString(collectionId);
     }
 
+    private static string ItemPath(string collectionId, string itemId)
+    {
+        ArgumentNullException.ThrowIfNull(itemId);
+        return Path(collectionId) + "/items/" + Uri.EscapeDataString(itemId);
+    }
+
     /// <summary>A new idempotency key: a version 4 UUID.</summary>
     private static string NewKey() => Guid.NewGuid().ToString("D");
 
-    private async Task<JsonObject> ObjectAsync(HttpMethod method, string path, JsonObject? body, DecisionNodeClient.RetryPolicy policy, CancellationToken ct, string? idempotencyKey = null)
+    private async Task<JsonObject> ObjectAsync(HttpMethod method, string path, JsonObject? body, DecisionNodeClient.RetryPolicy policy, CancellationToken ct, string? idempotencyKey = null, TimeSpan? timeout = null, DecisionNodeClient.AttemptPlan? plan = null)
     {
         var (parsed, result) = await _client.SendJsonAsync(
             method,
@@ -177,7 +215,7 @@ public sealed class CollectionsClient
             body is null ? null : DecisionNodeClient.JsonContentType,
             policy,
             ct,
-            idempotencyKey is null ? null : new DecisionNodeClient.AttemptPlan(null, true, idempotencyKey)).ConfigureAwait(false);
+            plan ?? (idempotencyKey is null && timeout is null ? null : new DecisionNodeClient.AttemptPlan(timeout, true, idempotencyKey))).ConfigureAwait(false);
         return parsed as JsonObject ?? throw new ServerError(new ErrorDetails
         {
             Status = result.Status,
@@ -204,4 +242,13 @@ public sealed class CollectionItemUpdate
 
     /// <summary>The item's whole new metadata, replacing the old; an empty object removes it all.</summary>
     public JsonObject? Metadata { get; init; }
+
+    /// <summary>A document's pin: <c>true</c> always gives it to a request that names its knowledge base.</summary>
+    public bool? Pinned { get; init; }
+
+    /// <summary>A pinned document's rank, 0 to 1,000: the order of pins, lowest first.</summary>
+    public int? PinRank { get; init; }
+
+    /// <summary>A document's new title, 1 to 200 characters once trimmed; it makes a new version.</summary>
+    public string? Title { get; init; }
 }

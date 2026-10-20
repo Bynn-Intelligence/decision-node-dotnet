@@ -32,7 +32,7 @@ public sealed partial class DecisionNodeClient : IDisposable
     public const string Version = "0.3.0";
 
     /// <summary>The version of the DecisionNode SDK specification this library implements.</summary>
-    public const string SpecVersion = "1.3";
+    public const string SpecVersion = "1.4";
 
     /// <summary>
     /// Local image bytes in one request (or one session frame, or one batch line) that
@@ -90,6 +90,9 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>True when the caller set <see cref="DecisionNodeClientOptions.Timeout"/>: it is then used as given, even for ocr.</summary>
     private readonly bool _timeoutSet;
 
+    /// <summary>True when the caller set <see cref="DecisionNodeClientOptions.UploadTimeout"/>: it then applies to documents too.</summary>
+    private readonly bool _uploadTimeoutSet;
+
     /// <summary>Creates a client from settings, the environment and the defaults, in that order.</summary>
     public DecisionNodeClient(DecisionNodeClientOptions options)
     {
@@ -110,6 +113,7 @@ public sealed partial class DecisionNodeClient : IDisposable
             throw new ArgumentOutOfRangeException(nameof(options), MaxRetries, "MaxRetries must be 0 or more.");
         }
         UploadTimeout = options.UploadTimeout ?? DefaultUploadTimeout;
+        _uploadTimeoutSet = options.UploadTimeout is not null;
         if (UploadTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(options), UploadTimeout, "UploadTimeout must be above zero.");
@@ -343,7 +347,10 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>Retries after the first attempt.</summary>
     public int MaxRetries { get; }
 
-    /// <summary>The time allowed for each attempt of an image's storage <c>PUT</c>.</summary>
+    /// <summary>
+    /// The time allowed for each attempt of an image's storage <c>PUT</c>, and of a document's
+    /// when it was set (a document's is otherwise <see cref="DefaultDocumentUploadTimeout"/>).
+    /// </summary>
     public TimeSpan UploadTimeout { get; }
 
     /// <summary>The inline threshold in use, in bytes (see <see cref="DefaultInlineThreshold"/>).</summary>
@@ -352,7 +359,10 @@ public sealed partial class DecisionNodeClient : IDisposable
     /// <summary>The Batch API: create, add, finalize, get, list, results and cancel.</summary>
     public BatchesClient Batches { get; }
 
-    /// <summary>The workspace's collections of faces, which the <c>face_recognition</c> booster searches.</summary>
+    /// <summary>
+    /// The workspace's collections: of faces, which the <c>face_recognition</c> booster searches,
+    /// and of documents (knowledge bases), which the <c>knowledge</c> booster reads.
+    /// </summary>
     public CollectionsClient Collections { get; }
 
     /// <summary>Per-key usage: one key's, or every key's of the workspace, over a period.</summary>
@@ -360,6 +370,12 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     /// <summary>The workspace's Decisions-only keys for devices: make, list, change and revoke them, with a Manage device keys key.</summary>
     public KeysClient Keys { get; }
+
+    /// <summary>
+    /// The time an item call with <c>wait</c> is allowed for each attempt: the caller's
+    /// <see cref="Timeout"/> when one was set, else 20 seconds, since the server holds it up to 10.
+    /// </summary>
+    internal TimeSpan WaitCallTimeout => _timeoutSet ? Timeout : WaitTimeout;
 
     /// <summary>
     /// The wait between attempts. Tests replace it to record the waits the client schedules
@@ -854,9 +870,10 @@ public sealed partial class DecisionNodeClient : IDisposable
 
     /// <summary>
     /// How one call's attempts run: the time allowed for each (<c>null</c>: the client's
-    /// <see cref="Timeout"/>) and whether a timed-out attempt is retried.
+    /// <see cref="Timeout"/>), whether a timed-out attempt is retried, the call's own
+    /// <c>Idempotency-Key</c>, and who hears each wait the server asked for before a retry.
     /// </summary>
-    internal sealed record AttemptPlan(TimeSpan? Timeout, bool RetryTimeouts, string? IdempotencyKey = null)
+    internal sealed record AttemptPlan(TimeSpan? Timeout, bool RetryTimeouts, string? IdempotencyKey = null, Action<TimeSpan>? OnServerWait = null)
     {
         public static readonly AttemptPlan Default = new(null, true);
     }
@@ -957,6 +974,11 @@ public sealed partial class DecisionNodeClient : IDisposable
                 // No price for an enrollment on this deployment: a retry never cures it.
                 retryable = false;
             }
+            if (result.Status == 529 && JsonValues.AsString(error.Details?["reason"]) == "ingestion_delayed")
+            {
+                // Ingestion is held up (an outage, not a busy moment): the caller decides whether to wait.
+                retryable = false;
+            }
             if (result.Status == 429 && error.ErrorType == "key_spend_cap_reached")
             {
                 // The key's daily spend cap: its Retry-After runs to 00:00 UTC, so it is raised at once.
@@ -964,7 +986,12 @@ public sealed partial class DecisionNodeClient : IDisposable
             }
             if (retryable && attempt < MaxRetries)
             {
-                await Delay(RetryWait(result.Header) ?? Backoff(attempt), ct).ConfigureAwait(false);
+                var asked = RetryWait(result.Header);
+                if (asked is { } w)
+                {
+                    plan.OnServerWait?.Invoke(w);
+                }
+                await Delay(asked ?? Backoff(attempt), ct).ConfigureAwait(false);
                 continue;
             }
             throw error;

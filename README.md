@@ -243,7 +243,7 @@ To turn a video file into frames, use the `dn` command line: `dn truth "Does a p
 
 ## Boosters
 
-A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. Seven boosters are available:
+A booster is a specialist model that reads the request's images (or, for `knowledge`, your documents) before the decision. Its reading is added to what the model sees as evidence and comes back in `Decision.Evidence`. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before. Eight boosters are available:
 
 | Booster | Reads | Tells the model |
 |---|---|---|
@@ -254,6 +254,7 @@ A booster is a specialist model that reads the request's images before the decis
 | `ocr` (`Booster.Ocr`) | Any picture | The text it shows, all of it by default, or what a `prompt` asks for: a formula in LaTeX, a table in HTML or Markdown, the fields of a JSON schema the prompt gives. Full support for English and Chinese; other languages need a prompt that names them |
 | `bynn_depth` (Depth Vision, `Booster.BynnDepth`) | Any picture | The distance in meters to what is in the picture: the nearest obstacle straight ahead (the floor left out), seven directions from left to right, and a grid of up to 16 by 16 cells |
 | `bynn_segment` (Segment Vision, `Booster.BynnSegment`) | Any picture, and up to 4 phrases naming what to find | Each match's outline, box and centre, and with depth on, its distance and size in meters |
+| `knowledge` (`Booster.Knowledge(...)`) | The request's state and questions, never a picture | The passages of your own documents that apply, pinned rules first, each cited by document, chunk and byte offsets (see Knowledge) |
 
 Depth Vision's and Segment Vision's distances and sizes are estimates from one picture, for decisions and planning, never a safety stop.
 
@@ -374,6 +375,7 @@ foreach (var reading in d.Evidence![Booster.BynnSegment].Results)
 | `OcrReading` | `Image`, `Text` (the reading in the format the prompt asks for, empty when the picture shows no text) and `Truncated` (`true` when the reading was too long for the request, so the model read it cut at its end; `Text` stays whole) |
 | `DepthReading` | `Image`, `Ahead` (meters to the nearest obstacle straight ahead, the floor left out; `null` when none is found), `Directions` (always 7, left to right, each meters or `null`), `Ground` (whether a floor was found and left out; when `false`, `Ahead` and `Directions` include everything), `GridRows`, `GridCols`, `Grid` (meters, row by row from the top left), `DepthMin`, `DepthMax`, `DepthMedian` (meters), `Width`, `Height` (pixels) |
 | `SegmentReading` | `Image`, `Width`, `Height` (pixels), `Prompts` (the phrases as read), `Instances` (in the order received, empty when nothing was found), `DepthSource` (`bynn_depth`, or `null` with depth off), `AssumedHfovDeg` (the field of view the sizes assume, or `null`). Each `SegmentInstance` has `Label` (the phrase it matched), `Score`, `Box` (`X1`, `Y1`, `X2`, `Y2`), `Polygon` and `Centroid` (`SegmentPoint`s, `X` and `Y`), `Area` (its share of the picture), `Opening` (`null`, or the largest hole it encloses: `Polygon`, `Centroid`, `Width`, `Height`, `Offset` (its centroid minus the centre of the match's box, `[dx, dy]`), `Area`), `Depth` (`null`, or `Median`, `OpeningMedian`, `OpeningRimMedian` in meters, each `null` when none) and `SizeM` (`null`, or `Width`, `Height` and `Opening` in meters). Coordinates are fractions of the picture from 0 to 1, from its top left |
+| `KnowledgeReading` | One per request, not per picture: the passages of a knowledge base and their citations (see Knowledge) |
 | `UnknownReading` | A reading of a booster this version does not know, or one with a missing or wrongly typed field, with its `Raw` fields; the decision does not fail |
 
 Every booster call billed is charged at that booster's price, listed on the [pricing page](https://decisionnode.com/docs/pricing#boosters), and drawn from your prepaid balance with the request's tokens; a booster that timed out or failed is free, and a refused request bills no booster call. The readings' tokens count as input tokens at the model's price.
@@ -387,6 +389,109 @@ Every booster call billed is charged at that booster's price, listed on the [pri
 | `OverloadedError` `booster_unavailable` | A booster with `require: true` failed or did not answer in time; retried |
 
 Every error of a request that named boosters carries `Boosters`: each booster's `Status` and `LatencyMs` from the `x-decisionnode-boosters` response header, in the request's order, so you can see which required booster failed.
+
+## Knowledge
+
+Knowledge gives a decision your own documents: a claims policy, house rules, a mission's special instructions. You keep them in a knowledge base (a collection of type `text`), and the `knowledge` booster retrieves the passages that apply to a request and gives them to the model as facts and rules to apply, with a citation for each.
+
+### Create a knowledge base and add documents
+
+```csharp
+using System.Text;
+using System.Text.Json.Nodes;
+using Bynn.DecisionNode;
+
+using var dn = new DecisionNodeClient();
+
+// A scope key is optional: it names the one metadata key whose value scopes a document,
+// here to one mission. It is fixed for the knowledge base's life.
+var kb = await dn.Collections.CreateAsync("Claims policy", type: "text", scopeKey: "mission");
+var col = (string)kb["id"]!;
+
+// Markdown inline, pinned: a rule that must always apply is pinned.
+await dn.Collections.AddDocumentAsync(col,
+    Document.FromText("# Receipts\nReject any claim over 500 SEK without a receipt."),
+    title: "Claims policy 2026", reference: "policy-2026", pinned: true);
+
+// A PDF from a path, scoped to mission M-42, waiting up to 10 seconds for it to be ready.
+var item = await dn.Collections.AddDocumentAsync(col, Document.FromFile("m42-brief.pdf"),
+    metadata: new JsonObject { ["mission"] = "M-42" }, wait: true);
+
+// Or wait on the client, for one document or for the whole knowledge base.
+item = await dn.Collections.WaitUntilReadyAsync(col, (string)item["id"]!);
+Console.WriteLine(item["status"]); // ready, or failed with its "error"
+```
+
+A document is text (`Document.FromText(text, format)`, Markdown by default or `Document.PlainText`), a file (`Document.FromFile(path)`, `Document.FromBytes(data, contentType, filename)` or `Document.FromStream(stream, contentType, filename)`), or an upload made before (`Document.FromUploadId(id)`, from `dn.UploadDocumentsAsync(documents)`). Text goes inline. A text or Markdown file under the inline threshold (512 KiB) that is UTF-8 goes inline too, titled by its file name without the extension unless you give a title. Every other file is uploaded first, with the upload's knowledge purpose, and the server converts it to text; once the text is ready the original file is deleted and only its text is kept. A file is read when the call is made; a stream is read to its end, into memory, before anything is sent.
+
+| File | Content type | Limit |
+|---|---|---|
+| Text, Markdown | `text/plain`, `text/markdown` | 512 KiB of text |
+| PDF | `application/pdf` | 50 MB, 100 pages |
+| Word, PowerPoint, Excel | DOCX, PPTX, XLSX | 50 MB |
+| HTML | `text/html` | 50 MB |
+| Images | `image/png`, `image/jpeg`, `image/tiff`, `image/webp` | 50 MB |
+
+Every file is at most 50 MB, and its text after extraction at most 512 KiB. The content type comes from `contentType`, else the file name's extension, else the first bytes (PDF and the image types); DOCX, PPTX, XLSX and text cannot be told from their bytes, so give bytes and streams of those a file name or a content type.
+
+Ingestion is asynchronous: a document is `queued`, then `processing` (`stage` `extracting` for a converted file, `chunking`, `embedding`), then `ready` or `failed`. `wait: true` holds the call on the server up to 10 seconds (20 seconds an attempt unless you set a timeout). `WaitUntilReadyAsync(collectionId, itemId, timeout, pollInterval)` polls: the item until it is `ready` or `failed`, or without an item the knowledge base until nothing is queued or processing. It waits `pollInterval` (default 1 second), 1.5 times longer after each read up to 10 seconds, and throws `TimeoutException` once `timeout` (default 300 seconds, a wall-clock deadline from the call) has passed. A failed document is returned, not thrown: its `error` says why.
+
+The other calls: `ReplaceDocumentAsync` (a new version, the old one serving until it is ready), `UpdateItemAsync` with `Pinned`, `PinRank` and `Title` beside `Reference`, `Label` and `Metadata`, `GetItemAsync(col, itemId, includeText: true)`, `ListItemsAsync`, `ListChunksAsync`, `DeleteItemAsync`, `DeleteFailedItemsAsync` (every failed document at once, answering `{"deleted": n}`) and `DeleteAsync`. Collections and items are returned as the API sends them, as `JsonObject`s. Adding, replacing and updating carry an `Idempotency-Key`, the same on every attempt.
+
+### Pins and scope
+
+A pinned document is always given to a request that names its knowledge base, never subject to ranking: pin a rule that must always apply, ordered by `pinRank`. A document whose metadata holds the scope key's value (`{"mission": "M-42"}`) is read only by a request that names that value in `scope`; a document without it is global and read by every request.
+
+### A decision with knowledge
+
+```csharp
+var d = await dn.DecideAsync(
+    state: new { claim = new { amount = "740.00", receipt = false }, mission = "M-42" },
+    questions: new Dictionary<string, Question> { ["approve"] = Question.Truth("Should the claim be approved under our policy?") },
+    boosters: new[] { Booster.Knowledge(col, scope: "M-42", require: true) });
+
+var reading = (KnowledgeReading)d.Evidence![Booster.KnowledgeName].Results[0];
+foreach (var p in reading.Passages)
+{
+    Console.WriteLine($"{p.N}{(p.Pinned ? " (pinned)" : "")} {p.Title} > {p.Heading}: item {p.Item}, chunk {p.Chunk}, bytes {p.ByteStart} to {p.ByteEnd}");
+}
+```
+
+`Booster.Knowledge(collection, query, scope, match, filter, topK, maxTokens, pinned, minScore, includeText, require)` sends each option only when given, as given; the API judges them. `query` replaces the query built from the questions and the state; `match` and `filter` select documents by metadata; `topK` (0 to 20, default 4; 0 reads the pins only) and `maxTokens` (`"auto"` or 128 to 8,192) bound the passages; `includeText` adds each passage's text (a full-scope key). With `require: true` a reading that cannot run over a ready knowledge base fails the request instead of deciding without it.
+
+The reading is a `KnowledgeReading`: `Collection`, `CollectionName`, `Corpus`, `Query`, `Budget`, `Scope`, `Warnings` (`scope_not_named`, `over_budget`, `budget_floor`, `pinned_filtered`), `Passages` (pinned first), `Omitted`, `PendingItems`, `Search` and `Truncated`. Each `KnowledgePassage` has `N`, `Pinned`, `Item`, `Chunk`, `ByteStart`, `ByteEnd`, `Reference`, `Title`, `Heading`, `Tokens`, `Score` (`null` for a pin), `Lexical`, `Rendered` and `Text`. The byte offsets are UTF-8 byte offsets, end exclusive, into the document's stored text from `GetItemAsync(col, itemId, includeText: true)`. A C# string is UTF-16, so encode the text to UTF-8 before slicing it:
+
+```csharp
+var stored = await dn.Collections.GetItemAsync(col, p.Item, includeText: true);
+var bytes = Encoding.UTF8.GetBytes((string)stored["text"]!);
+var quote = Encoding.UTF8.GetString(bytes, (int)p.ByteStart, (int)(p.ByteEnd - p.ByteStart));
+```
+
+### Search
+
+`SearchAsync(col, query, scope, match, filter, topK, pinned, maxTokens)` runs the retrieval without a decision, to try a query, and returns a `KnowledgeReading` with every passage's text. It needs a full-scope key.
+
+```csharp
+var found = await dn.Collections.SearchAsync(col, "receipts for small claims", scope: "M-42", topK: 3);
+```
+
+A knowledge call, a decision naming the booster or a search, costs USD 0.001, one a request whatever it retrieves; ingesting and storing documents are priced per token and per chunk, on the [pricing page](https://decisionnode.com/docs/pricing).
+
+### Errors you may meet
+
+| Error | When |
+|---|---|
+| `DecisionNodeError` 409 `knowledge_collection_empty` | `require: true` on a knowledge base with nothing ready and nothing pending; `Details` holds `items` and `failed` |
+| `OverloadedError` `booster_unavailable` | `require: true` while no document is ready yet but some are being ingested; retried after its `Retry-After` (5 seconds) |
+| `OverloadedError` with `Details["reason"]` `ingestion_delayed` | Ingestion has been held up for 15 minutes: raised at once, never retried, with a `RetryAfter` of 60 seconds, so you decide whether to wait |
+| `RateLimitError` with `Details["reason"]` `ingest_queue_full` or `ingest_tokens_per_hour` | The workspace's ingestion rate; retried after its `Retry-After` |
+| `RequestTooLargeError` `item_too_large` | A text over 512 KiB once normalised |
+| `ValidationError` `invalid_text` | A text that is not UTF-8 or holds a NUL |
+| `DecisionNodeError` 409 `reference_taken`, `pinned_budget_exceeded`, `chunks_limit_reached` | Another document holds the reference; the pinned documents are over their budget; the workspace's chunks are spent |
+| `BadRequestError` `upload_purpose_mismatch` | An image upload named as a document, or a document upload named as an image |
+| `PermissionDeniedError` `key_scope_denied` | A search, `includeText` or a document upload from a key that is not full-scope |
+
+The library checks what it can before sending, as the API would answer it, with nothing sent: a missing or out-of-bounds title (1 to 200 characters), an empty text, a format other than `markdown` or `text`, a pin rank outside 0 to 1,000, a reference, label or metadata out of bounds and a scope key not of `^[a-z0-9_]{1,40}$` (`ValidationError`); a file that is empty, over 50 MB, or of a type that is not a document's or cannot be told (`BadRequestError` `api_usage_error`).
 
 ## Fine-tuned models
 
@@ -580,7 +685,7 @@ catch (ValidationError e)
 }
 ```
 
-A bad argument throws .NET's own `ArgumentException` (or its subclasses `ArgumentNullException` and `ArgumentOutOfRangeException`), never a DecisionNode error: an empty question map, a value that cannot be serialised, an unreadable image file, a base URL that is not `https`, a `timeout` that is not above zero, a negative `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a `pollInterval` below 10 seconds, an `HttpClient` that cannot be shown to refuse redirects (including one with a `DelegatingHandler` you have not declared safe), and an `HttpClient` that replaces the certificate check for an `https` base URL. A missing key is an `AuthenticationError`, also before anything is sent.
+A bad argument throws .NET's own `ArgumentException` (or its subclasses `ArgumentNullException` and `ArgumentOutOfRangeException`), never a DecisionNode error: an empty question map, a value that cannot be serialised, an unreadable image file, a base URL that is not `https`, a `timeout` that is not above zero, a negative `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a `pollInterval` below 10 seconds, a `WaitUntilReadyAsync` `pollInterval` below 0.1 seconds or `timeout` not above zero, an `HttpClient` that cannot be shown to refuse redirects (including one with a `DelegatingHandler` you have not declared safe), and an `HttpClient` that replaces the certificate check for an `https` base URL. A missing key is an `AuthenticationError`, also before anything is sent.
 
 ## Timeouts and retries
 
@@ -599,10 +704,10 @@ Your `CancellationToken` cancels the whole call, retries included, and surfaces 
 | API key | `apiKey` | `DECISIONNODE_API_KEY` | none |
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
 | Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-moe` |
-| Timeout per attempt | `timeout` (above zero) | | 10 seconds (30 for a decision naming `ocr`) |
+| Timeout per attempt | `timeout` (above zero) | | 10 seconds (30 for a decision naming `ocr`, 20 for a document call with `wait`) |
 | Retries | `maxRetries` (0 or more) | | 2 |
 | Inline threshold | `inlineThreshold` (0 or more) | | 524,288 bytes |
-| Timeout per image upload attempt | `uploadTimeout` (above zero) | | 60 seconds |
+| Timeout per upload attempt | `uploadTimeout` (above zero) | | 60 seconds for an image, 120 for a document |
 | Extra headers | `headers` | | none |
 | HTTP client | `httpClient` | | one the client creates and owns |
 
@@ -643,7 +748,7 @@ The library sends no telemetry and no request other than to the base URL, the st
 
 ## Versioning
 
-This library implements version 1.3 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
+This library implements version 1.4 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 
@@ -655,7 +760,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.13); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.23); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 

@@ -90,7 +90,7 @@ public class CollectionsTests
     public async Task CreateChecksTheTypeAndTheNameLocally()
     {
         var type = await Refused(dn => dn.Collections.CreateAsync("Staff", "person"));
-        Same("""{"type":"literal_error","loc":["body","type"],"msg":"Input should be 'face'","input":"person","ctx":{"expected":"'face'"}}""", type);
+        Same("""{"type":"literal_error","loc":["body","type"],"msg":"Input should be 'face' or 'text'","input":"person","ctx":{"expected":"'face' or 'text'"}}""", type);
         var empty = await Refused(dn => dn.Collections.CreateAsync(""));
         Same("""{"type":"string_too_short","loc":["body","name"],"msg":"String should have at least 1 character","input":"","ctx":{"min_length":1}}""", empty);
         var name = new string('n', 81);

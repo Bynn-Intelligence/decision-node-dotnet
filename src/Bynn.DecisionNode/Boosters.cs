@@ -75,6 +75,13 @@ public sealed class Booster
     /// </summary>
     public const string BynnSegment = "bynn_segment";
 
+    /// <summary>
+    /// The name <c>knowledge</c>: passages from the workspace's own documents, held in a
+    /// knowledge base (a collection of type <c>text</c>). Build it with <see cref="Knowledge"/>;
+    /// its reading is a <see cref="KnowledgeReading"/>.
+    /// </summary>
+    public const string KnowledgeName = "knowledge";
+
     private readonly JsonNode _wire;
 
     private Booster(JsonNode wire)
@@ -130,6 +137,68 @@ public sealed class Booster
         {
             wire["options"] = JsonValues.ToNode(options, "the booster's options");
         }
+        return new Booster(wire);
+    }
+
+    /// <summary>
+    /// The <c>knowledge</c> booster: the passages of a knowledge base that apply to the decision,
+    /// given to the model as facts and rules to apply. Sent as
+    /// <c>{"name": "knowledge", "require"?: true, "options": {"collection", ...}}</c>, every option
+    /// left out when <c>null</c> and sent as given otherwise; nothing is checked before sending,
+    /// the API answers a bad option with its <see cref="BadRequestError"/>. It reads no picture.
+    /// </summary>
+    /// <param name="collection">The knowledge base's <c>col_</c> id.</param>
+    /// <param name="query">Replaces the query built from the questions' instructions and the state; 1 to 2,000 characters.</param>
+    /// <param name="scope">The value of the knowledge base's scope key, such as a mission's id: its documents are read beside the global ones.</param>
+    /// <param name="match">Metadata equality, any JSON-serialisable value, such as <c>{"region": "SE"}</c>; an array value is any of.</param>
+    /// <param name="filter">A typed filter tree of <c>and</c>, <c>or</c> and leaves, any JSON-serialisable value.</param>
+    /// <param name="topK">The most retrieved passages, pins not counted, 0 to 20 (default 4); 0 reads the pinned documents only.</param>
+    /// <param name="maxTokens">The retrieved passages' token budget: an integer from 128 to 8,192, or <c>"auto"</c> (the default).</param>
+    /// <param name="pinned"><c>false</c> leaves the pinned documents out.</param>
+    /// <param name="minScore">A similarity floor, 0 to 1, for passages found by meaning alone.</param>
+    /// <param name="includeText">Adds each passage's text and the query's to the reading; needs a full-scope key.</param>
+    /// <param name="require">
+    /// <c>true</c>: a reading that cannot run over a ready knowledge base fails the request
+    /// (<see cref="OverloadedError"/> <c>booster_unavailable</c>, or the 409
+    /// <c>knowledge_collection_empty</c>) instead of deciding without it. Sent only when <c>true</c>.
+    /// </param>
+    public static Booster Knowledge(
+        string collection,
+        string? query = null,
+        string? scope = null,
+        object? match = null,
+        object? filter = null,
+        int? topK = null,
+        object? maxTokens = null,
+        bool? pinned = null,
+        double? minScore = null,
+        bool? includeText = null,
+        bool require = false)
+    {
+        ArgumentNullException.ThrowIfNull(collection);
+        var options = new JsonObject { ["collection"] = collection };
+        void Add(string key, object? value)
+        {
+            if (value is not null)
+            {
+                options[key] = JsonValues.ToNode(value, $"the knowledge option '{key}'");
+            }
+        }
+        Add("query", query);
+        Add("scope", scope);
+        Add("match", match);
+        Add("filter", filter);
+        Add("top_k", topK);
+        Add("max_tokens", maxTokens);
+        Add("pinned", pinned);
+        Add("min_score", minScore);
+        Add("include_text", includeText);
+        var wire = new JsonObject { ["name"] = KnowledgeName };
+        if (require)
+        {
+            wire["require"] = true;
+        }
+        wire["options"] = options;
         return new Booster(wire);
     }
 
@@ -266,7 +335,8 @@ public sealed class Evidence
 /// <summary>
 /// One booster's reading of one image: an <see cref="AgeReading"/>, an
 /// <see cref="AiGeneratedReading"/>, an <see cref="OcrReading"/>, a <see cref="FaceDetectionReading"/>,
-/// a <see cref="FaceRecognitionReading"/>, a <see cref="DepthReading"/>, a <see cref="SegmentReading"/> or,
+/// a <see cref="FaceRecognitionReading"/>, a <see cref="DepthReading"/>, a <see cref="SegmentReading"/>,
+/// a <see cref="KnowledgeReading"/> (one per request, not per image) or,
 /// for a booster this version of the library does not know
 /// or a reading with a missing or wrongly typed field, an <see cref="UnknownReading"/> holding
 /// its raw fields. A reading never fails the decision. Numbers are passed through as received.
@@ -306,6 +376,7 @@ public abstract class Reading
                 DecisionNode.Booster.FaceRecognition => FaceRecognitionReading.Read(raw),
                 DecisionNode.Booster.BynnDepth => DepthReading.Read(raw),
                 DecisionNode.Booster.BynnSegment => SegmentReading.Read(raw),
+                DecisionNode.Booster.KnowledgeName => KnowledgeReading.Read(raw),
                 _ => new UnknownReading(booster, raw),
             };
         }

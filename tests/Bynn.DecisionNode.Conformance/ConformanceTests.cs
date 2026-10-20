@@ -459,7 +459,7 @@ public sealed class ConformanceTests
     }
 
     /// <summary>The collections calls' results (suite 1.13), each the API's object as sent; <c>collections</c> is the list.</summary>
-    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted", "key_usage", "usage_page", "usage_items", "created_key", "api_key", "key_page", "api_keys", "key_revoked", "keys_revoked" };
+    private static readonly string[] CollectionKinds = { "collection", "collections", "item", "item_page", "deleted", "chunk_page", "key_usage", "usage_page", "usage_items", "created_key", "api_key", "key_page", "api_keys", "key_revoked", "keys_revoked" };
 
     private static void CheckCollectionResult(string kind, JsonNode? expected, object? result, string path)
     {
@@ -1070,6 +1070,13 @@ public sealed class ConformanceTests
                     Match(Canon(spec["batch"] ?? new JsonObject()), Canon(Driver.Batch(run.Batch)), path + ".batch");
                     CheckResultsSpec(spec, run.Results, path);
                     break;
+                case "knowledge":
+                    if (result is not KnowledgeReading reading)
+                    {
+                        throw Fail($"{path}: expected a knowledge reading, got {Describe(result)}");
+                    }
+                    Match(Canon(spec["knowledge"] ?? new JsonObject()), Canon(Driver.Knowledge(reading)), path + ".knowledge");
+                    break;
                 case "checked":
                     if (result is not Checked)
                     {
@@ -1114,6 +1121,11 @@ public sealed class ConformanceTests
                 default:
                     throw Fail($"{path}: unknown result kind {kindNode}");
             }
+            return;
+        }
+        if (result is TimeoutException && (string?)spec["error"] == "TimeoutError")
+        {
+            // The language's own timeout error: .NET's TimeoutException.
             return;
         }
         if (result is not DecisionNodeError dnError)

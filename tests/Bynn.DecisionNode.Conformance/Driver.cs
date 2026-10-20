@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Bynn.DecisionNode.Internal;
 
 namespace Bynn.DecisionNode.Conformance;
 
@@ -110,6 +111,11 @@ public static class Driver
         {
             return error;
         }
+        catch (TimeoutException error)
+        {
+            // The language's timeout error, which WaitUntilReadyAsync throws past its timeout.
+            return error;
+        }
     }
 
     /// <summary>
@@ -169,7 +175,49 @@ public static class Driver
             "batches.list" => Wrap(client.Batches.ListAsync(args["offset"] is { } o ? (int)o : null, args["limit"] is { } l ? (int)l : null)),
             "batches.results" => ReadAll(client.Batches.ResultsAsync(Text("batch_id")!)),
             "batches.cancel" => Wrap(client.Batches.CancelAsync(Text("batch_id")!)),
-            "collections.create" => Wrap(client.Collections.CreateAsync(Text("name")!, args.ContainsKey("type") ? Text("type")! : "face")),
+            "collections.create" => Wrap(client.Collections.CreateAsync(Text("name")!, args.ContainsKey("type") ? Text("type")! : "face", Text("scope_key"))),
+            "collections.add_document" => Wrap(client.Collections.AddDocumentAsync(
+                Text("collection_id")!,
+                DocumentOf(args["document"], ctx),
+                Text("title"),
+                Text("reference"),
+                Arg("pinned") is { } ap ? (bool)ap : null,
+                Arg("pin_rank") is { } apr ? (int)apr : null,
+                Text("label"),
+                Arg("metadata") as JsonObject,
+                Arg("wait") is { } aw && (bool)aw)),
+            "collections.replace_document" => Wrap(client.Collections.ReplaceDocumentAsync(
+                Text("collection_id")!,
+                Text("item_id")!,
+                DocumentOf(args["document"], ctx),
+                Text("title"),
+                Text("reference"),
+                Arg("pinned") is { } rp ? (bool)rp : null,
+                Arg("pin_rank") is { } rpr ? (int)rpr : null,
+                Text("label"),
+                Arg("metadata") as JsonObject,
+                Arg("wait") is { } rw && (bool)rw)),
+            "collections.get_item" => Wrap(client.Collections.GetItemAsync(Text("collection_id")!, Text("item_id")!, Arg("include_text") is { } it && (bool)it)),
+            "collections.list_chunks" => Wrap(client.Collections.ListChunksAsync(
+                Text("collection_id")!,
+                Text("item_id")!,
+                args["offset"] is { } co ? (int)co : null,
+                args["limit"] is { } cl ? (int)cl : null)),
+            "collections.search" => Wrap(client.Collections.SearchAsync(
+                Text("collection_id")!,
+                Text("query"),
+                Text("scope"),
+                Arg("match"),
+                Arg("filter"),
+                Arg("top_k") is { } k ? (int)k : null,
+                Arg("pinned") is { } sp ? (bool)sp : null,
+                Arg("max_tokens"))),
+            "collections.wait_until_ready" => Wrap(client.Collections.WaitUntilReadyAsync(
+                Text("collection_id")!,
+                Text("item_id"),
+                Number("timeout") is { } wt ? TimeSpan.FromSeconds(wt) : null,
+                Number("poll_interval") is { } wp ? TimeSpan.FromSeconds(wp) : null)),
+            "upload_documents" => Wrap(client.UploadDocumentsAsync(((JsonArray)args["documents"]!).Select(d => DocumentOf(d, ctx)).ToList())),
             "collections.list" => Wrap(client.Collections.ListAsync()),
             "collections.get" => Wrap(client.Collections.GetAsync(Text("collection_id")!)),
             "collections.delete" => Wrap(client.Collections.DeleteAsync(Text("collection_id")!)),
@@ -188,6 +236,9 @@ public static class Driver
                     Label = Text("label"),
                     ClearLabel = args.ContainsKey("label") && args["label"] is null,
                     Metadata = args["metadata"] is JsonObject um ? (JsonObject)Plain(um, ctx)! : null,
+                    Pinned = Arg("pinned") is { } up ? (bool)up : null,
+                    PinRank = Arg("pin_rank") is { } upr ? (int)upr : null,
+                    Title = Text("title"),
                 })),
             "collections.list_items" => Wrap(client.Collections.ListItemsAsync(
                 Text("collection_id")!,
@@ -529,6 +580,10 @@ public static class Driver
 
     private static Booster BoosterOf(JsonNode item)
     {
+        if (item is JsonObject { Count: 1 } knowledge && knowledge["$knowledge"] is JsonObject options)
+        {
+            return KnowledgeOf(options);
+        }
         if (item is not JsonObject { Count: 1 } wrapper || wrapper["$booster"] is not JsonObject spec)
         {
             return Booster.FromJson(item);
@@ -557,6 +612,102 @@ public static class Driver
             (images as JsonArray)?.Select(i => (string)i!).ToList(),
             require is null ? null : (bool)require,
             spec["options"]?.DeepClone());
+    }
+
+    /// <summary>
+    /// <c>$knowledge</c>: the typed builder, each argument passed only when present. One whose
+    /// values the typed parameters cannot take is passed in its wire form, sent as given.
+    /// </summary>
+    private static Booster KnowledgeOf(JsonObject spec)
+    {
+        static bool Kind(JsonNode? node, params System.Text.Json.JsonValueKind[] kinds) => node is null || (node is JsonValue v && kinds.Contains(v.GetValueKind()));
+        var str = System.Text.Json.JsonValueKind.String;
+        var num = System.Text.Json.JsonValueKind.Number;
+        var flags = new[] { System.Text.Json.JsonValueKind.True, System.Text.Json.JsonValueKind.False };
+        var typed = spec.ContainsKey("collection") && Kind(spec["collection"], str) && spec["collection"] is not null
+            && Kind(spec["query"], str) && Kind(spec["scope"], str)
+            && (spec["top_k"] is null || JsonValues.AsInteger(spec["top_k"]) is { } tk && tk >= int.MinValue && tk <= int.MaxValue)
+            && Kind(spec["pinned"], flags) && Kind(spec["min_score"], num) && Kind(spec["include_text"], flags) && Kind(spec["require"], flags)
+            && spec.Where(kv => kv.Key is not ("match" or "filter" or "max_tokens")).All(kv => kv.Value is not null);
+        if (!typed)
+        {
+            var wire = new JsonObject { ["name"] = Booster.KnowledgeName };
+            if (spec.ContainsKey("require"))
+            {
+                wire["require"] = spec["require"]?.DeepClone();
+            }
+            var options = new JsonObject();
+            foreach (var (k, v) in spec)
+            {
+                if (k != "require")
+                {
+                    options[k] = v?.DeepClone();
+                }
+            }
+            wire["options"] = options;
+            return Booster.FromJson(wire);
+        }
+        return Booster.Knowledge(
+            (string)spec["collection"]!,
+            (string?)spec["query"],
+            (string?)spec["scope"],
+            spec["match"]?.DeepClone(),
+            spec["filter"]?.DeepClone(),
+            spec["top_k"] is { } topK ? (int)topK : null,
+            spec["max_tokens"]?.DeepClone(),
+            spec["pinned"] is { } pinned ? (bool)pinned : null,
+            spec["min_score"] is { } minScore ? (double)minScore : null,
+            spec["include_text"] is { } includeText ? (bool)includeText : null,
+            spec["require"] is { } require && (bool)require);
+    }
+
+    /// <summary>
+    /// <c>$document</c>: text, a file by path, bytes (<c>data_base64</c>, <c>data_text</c> as UTF-8,
+    /// <c>repeat_text</c>), a stream (<c>stream_base64</c>) or an upload id; <c>pad_to</c> pads the
+    /// bytes with zeros, a path then passed as bytes with its file name.
+    /// </summary>
+    private static Document DocumentOf(JsonNode? wrapper, Dictionary<string, object?> ctx)
+    {
+        var spec = (JsonObject)Plain(((JsonObject)wrapper!)["$document"], ctx)!;
+        var contentType = (string?)spec["content_type"];
+        var filename = (string?)spec["filename"];
+        if (spec["text"] is { } text)
+        {
+            return Document.FromText((string)text!, (string?)spec["format"]);
+        }
+        if (spec["upload_id"] is { } uploadId)
+        {
+            return Document.FromUploadId((string)uploadId!);
+        }
+        if (spec["path"] is { } path && spec["pad_to"] is null)
+        {
+            return Document.FromFile(Path.Combine(Suite.Directory, (string)path!), contentType, filename);
+        }
+        byte[] data;
+        if (spec["data_text"] is { } dataText)
+        {
+            data = System.Text.Encoding.UTF8.GetBytes((string)dataText!);
+        }
+        else if (spec["repeat_text"] is JsonObject repeat)
+        {
+            data = System.Text.Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat((string)repeat["repeat"]!, (int)repeat["times"]!)));
+        }
+        else if (spec["path"] is { } padded)
+        {
+            data = File.ReadAllBytes(Path.Combine(Suite.Directory, (string)padded!));
+            filename ??= Path.GetFileName((string)padded!);
+        }
+        else
+        {
+            data = Convert.FromBase64String((string)(spec["data_base64"] ?? spec["stream_base64"])!);
+        }
+        if (spec["pad_to"] is { } padTo && (int)padTo > data.Length)
+        {
+            Array.Resize(ref data, (int)padTo);
+        }
+        return spec.ContainsKey("stream_base64")
+            ? Document.FromStream(new MemoryStream(data), contentType, filename)
+            : Document.FromBytes(data, contentType, filename);
     }
 
     private static List<Image>? Images(JsonObject args, Dictionary<string, object?> ctx) =>
@@ -672,6 +823,7 @@ public static class Driver
         Batch b => Batch(b),
         BatchPage p => Page(p),
         Session s => Session(s),
+        KnowledgeReading k => Knowledge(k),
         IReadOnlyList<string> ids => new JsonArray(ids.Select(i => (JsonNode?)i).ToArray()),
         IReadOnlyList<JsonObject> collections => new JsonArray(collections.Select(c => (JsonNode?)c.DeepClone()).ToArray()),
         JsonNode n => n,
@@ -950,7 +1102,42 @@ public static class Driver
                     : null,
             }).ToArray()),
         },
+        KnowledgeReading k => Knowledge(k),
         _ => new JsonObject { ["kind"] = "unknown", ["raw"] = r.Raw?.DeepClone() },
+    };
+
+    /// <summary>A knowledge reading as the cases write it: its objects as sent, each field null when absent but warnings.</summary>
+    public static JsonObject Knowledge(KnowledgeReading k) => new()
+    {
+        ["kind"] = "knowledge",
+        ["collection"] = k.Collection,
+        ["collection_name"] = k.CollectionName,
+        ["corpus"] = k.Corpus?.Raw.DeepClone(),
+        ["query"] = k.Query?.Raw.DeepClone(),
+        ["budget"] = k.Budget?.Raw.DeepClone(),
+        ["scope"] = k.Scope is { } scope ? new JsonObject { ["key"] = scope.Key, ["value"] = scope.Value } : null,
+        ["warnings"] = new JsonArray(k.Warnings.Select(w => (JsonNode?)w).ToArray()),
+        ["passages"] = new JsonArray(k.Passages.Select(p => (JsonNode?)new JsonObject
+        {
+            ["n"] = p.N,
+            ["pinned"] = p.Pinned,
+            ["item"] = p.Item,
+            ["reference"] = p.Reference,
+            ["title"] = p.Title,
+            ["heading"] = p.Heading,
+            ["chunk"] = p.Chunk,
+            ["byte_start"] = p.ByteStart,
+            ["byte_end"] = p.ByteEnd,
+            ["tokens"] = p.Tokens,
+            ["score"] = p.Score,
+            ["lexical"] = p.Lexical,
+            ["rendered"] = p.Rendered,
+            ["text"] = p.Text,
+        }).ToArray()),
+        ["omitted"] = k.Omitted?.DeepClone(),
+        ["pending_items"] = k.PendingItems,
+        ["search"] = k.Search?.Raw.DeepClone(),
+        ["truncated"] = k.Truncated,
     };
 
     private static JsonObject Box(FaceBox b) => new() { ["x1"] = b.X1, ["y1"] = b.Y1, ["x2"] = b.X2, ["y2"] = b.Y2 };

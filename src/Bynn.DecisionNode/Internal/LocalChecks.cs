@@ -1005,18 +1005,106 @@ internal static class LocalChecks
 
     private static readonly System.Text.RegularExpressions.Regex ItemReference = new(@"\A[A-Za-z0-9_.:-]{1,64}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-    /// <summary>A collection's create: a type other than <c>face</c>, then a name not 1 to 80 characters.</summary>
-    internal static void CollectionCreate(string? name, string? type)
+    /// <summary>The characters a text collection's scope key is written in, as the API states the pattern.</summary>
+    internal const string ScopeKeyPattern = "^[a-z0-9_]{1,40}$";
+
+    private static readonly System.Text.RegularExpressions.Regex ScopeKey = new(@"\A[a-z0-9_]{1,40}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A collection's create: a type other than <c>face</c> or <c>text</c>, then a name not 1 to
+    /// 80 characters, then a scope key, when given, not of its pattern.
+    /// </summary>
+    internal static void CollectionCreate(string? name, string? type, string? scopeKey = null)
     {
         var entries = new List<JsonNode?>();
-        if (type != "face")
+        if (type is not ("face" or "text"))
         {
-            entries.Add(Entry("literal_error", new JsonArray("body", "type"), "Input should be 'face'", Echoed(type), new JsonObject { ["expected"] = "'face'" }));
+            entries.Add(Entry("literal_error", new JsonArray("body", "type"), "Input should be 'face' or 'text'", Echoed(type), new JsonObject { ["expected"] = "'face' or 'text'" }));
         }
         entries.AddRange(StringEntries(new JsonArray("body", "name"), name, MaxCollectionName, null));
+        if (scopeKey is not null && !ScopeKey.IsMatch(scopeKey))
+        {
+            entries.Add(Entry("string_pattern_mismatch", new JsonArray("body", "scope_key"), $"String should match pattern '{ScopeKeyPattern}'", Echoed(scopeKey)));
+        }
         if (entries.Count > 0)
         {
             throw Unprocessable(entries);
+        }
+    }
+
+    /// <summary>The longest document title, in characters (code points), once trimmed.</summary>
+    internal const int MaxTitle = 200;
+
+    /// <summary>The highest pin rank.</summary>
+    internal const int MaxPinRank = 1000;
+
+    /// <summary>
+    /// A document's item fields, as the API's text route judges them, in its order: the title
+    /// (missing when <paramref name="titleRequired"/> and none is given, else 1 to 200 characters
+    /// once trimmed), the format, the reference, the pin rank, the label and the metadata; then,
+    /// alone, an empty text.
+    /// </summary>
+    internal static void DocumentItem(string? title, bool titleRequired, string? format, string? text, string? reference, int? pinRank, string? label, JsonObject? metadata)
+    {
+        var entries = new List<JsonNode?>();
+        if (title is null)
+        {
+            if (titleRequired)
+            {
+                entries.Add(Entry("missing", new JsonArray("body", "title"), "Field required", null));
+            }
+        }
+        else
+        {
+            entries.AddRange(TitleEntries(title));
+        }
+        if (format is not null and not ("markdown" or "text"))
+        {
+            entries.Add(Entry("literal_error", new JsonArray("body", "format"), "Input should be 'markdown' or 'text'", Echoed(format)));
+        }
+        entries.AddRange(TextFields(reference, pinRank, label, metadata));
+        if (entries.Count > 0)
+        {
+            throw Unprocessable(entries);
+        }
+        if (text is { Length: 0 })
+        {
+            throw Unprocessable(new List<JsonNode?> { Entry("string_too_short", new JsonArray("body", "text"), "The text is empty", "") });
+        }
+    }
+
+    /// <summary>A title not 1 to 200 characters once trimmed.</summary>
+    private static IEnumerable<JsonNode?> TitleEntries(string title)
+    {
+        var length = title.Trim().EnumerateRunes().Count();
+        if (length is < 1 or > MaxTitle)
+        {
+            yield return Entry("string_too_long", new JsonArray("body", "title"), $"A title is 1 to {MaxTitle} characters", Echoed(title));
+        }
+    }
+
+    /// <summary>The fields a text item's write shares, in the API's order, with the text route's words.</summary>
+    private static IEnumerable<JsonNode?> TextFields(string? reference, int? pinRank, string? label, JsonObject? metadata)
+    {
+        if (reference is not null && !ItemReference.IsMatch(reference))
+        {
+            yield return Entry("string_pattern_mismatch", new JsonArray("body", "reference"), $"String should match pattern '{ItemReferencePattern}'", Echoed(reference));
+        }
+        if (pinRank is < 0 or > MaxPinRank)
+        {
+            yield return Entry("int_range", new JsonArray("body", "pin_rank"), $"Input should be an integer from 0 to {MaxPinRank}", JsonValue.Create(pinRank.Value));
+        }
+        if (label is not null && (label.Length == 0 || label.EnumerateRunes().Count() > MaxItemLabel))
+        {
+            // Its control or invisible characters are the server's to judge.
+            yield return Entry("string_too_long", new JsonArray("body", "label"), $"A label is 1 to {MaxItemLabel} characters with no control or invisible characters", Echoed(label));
+        }
+        if (metadata is not null)
+        {
+            foreach (var entry in MetadataEntries(metadata))
+            {
+                yield return entry;
+            }
         }
     }
 
@@ -1047,13 +1135,20 @@ internal static class LocalChecks
         }
     }
 
-    /// <summary>An item update with nothing to change.</summary>
-    internal static void CollectionUpdate(string? reference, bool labelGiven, string? label, JsonObject? metadata)
+    /// <summary>
+    /// An item update: the reference, label and metadata as an enrollment's, a document's pin
+    /// rank and title, and nothing to change.
+    /// </summary>
+    internal static void CollectionUpdate(string? reference, bool labelGiven, string? label, JsonObject? metadata, bool? pinned = null, int? pinRank = null, string? title = null)
     {
         var entries = new List<JsonNode?>();
         if (reference is not null)
         {
             entries.AddRange(StringEntries(new JsonArray("body", "reference"), reference, MaxItemReference, ItemReferencePattern));
+        }
+        if (pinRank is < 0 or > MaxPinRank)
+        {
+            entries.Add(Entry("int_range", new JsonArray("body", "pin_rank"), $"Input should be an integer from 0 to {MaxPinRank}", JsonValue.Create(pinRank.Value)));
         }
         if (labelGiven && label is not null)
         {
@@ -1063,7 +1158,11 @@ internal static class LocalChecks
         {
             entries.AddRange(MetadataEntries(metadata));
         }
-        if (reference is null && !labelGiven && metadata is null)
+        if (title is not null)
+        {
+            entries.AddRange(TitleEntries(title));
+        }
+        if (reference is null && !labelGiven && metadata is null && pinned is null && pinRank is null && title is null)
         {
             entries.Add(Entry("missing", new JsonArray("body"), "Send reference, label, metadata or any of them", null));
         }

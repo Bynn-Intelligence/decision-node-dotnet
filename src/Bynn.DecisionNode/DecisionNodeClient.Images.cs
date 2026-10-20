@@ -9,7 +9,7 @@ namespace Bynn.DecisionNode;
 public sealed partial class DecisionNodeClient
 {
     /// <summary>The <c>error_type</c>s of a request naming an upload that can no longer be used.</summary>
-    private static readonly HashSet<string> StaleUpload = new(StringComparer.Ordinal)
+    internal static readonly HashSet<string> StaleUpload = new(StringComparer.Ordinal)
     {
         "upload_expired", "upload_consumed", "upload_not_found", "upload_incomplete",
     };
@@ -344,7 +344,7 @@ public sealed partial class DecisionNodeClient
     /// One <c>POST /v1/uploads</c> for <paramref name="images"/>: one upload per file, and
     /// when the URLs stop being usable, by the client's clock (<c>expires_in</c>, 300 s).
     /// </summary>
-    private async Task<(JsonArray Uploads, DateTimeOffset UrlsExpire)> PresignAsync(IReadOnlyList<Image> images, CancellationToken ct)
+    private Task<(JsonArray Uploads, DateTimeOffset UrlsExpire)> PresignAsync(IReadOnlyList<Image> images, CancellationToken ct)
     {
         var files = new JsonArray();
         foreach (var image in images)
@@ -357,10 +357,20 @@ public sealed partial class DecisionNodeClient
                 ["sha256"] = Convert.ToBase64String(image.Sha256),
             });
         }
+        return PresignFilesAsync(files, ct);
+    }
+
+    /// <summary>
+    /// One <c>POST /v1/uploads</c> for the files given in their wire form: one upload per file,
+    /// and when the URLs stop being usable, by the client's clock (<c>expires_in</c>, 300 s).
+    /// </summary>
+    private async Task<(JsonArray Uploads, DateTimeOffset UrlsExpire)> PresignFilesAsync(JsonArray files, CancellationToken ct)
+    {
+        var count = files.Count;
         var request = JsonValues.ToUtf8(new JsonObject { ["files"] = files });
         var (body, result) = await SendJsonAsync(HttpMethod.Post, "/v1/uploads", request, JsonContentType, RetryPolicy.Default, ct).ConfigureAwait(false);
         if ((body as JsonObject)?["uploads"] is not JsonArray uploads
-            || uploads.Count != images.Count
+            || uploads.Count != count
             || uploads.Any(u => u is not JsonObject o || JsonValues.AsString(o["upload_id"]) is null || JsonValues.AsString(o["url"]) is null))
         {
             throw new ServerError(new ErrorDetails
@@ -379,7 +389,16 @@ public sealed partial class DecisionNodeClient
     /// The <c>PUT</c> of one image to its presigned URL: exactly the headers the presign
     /// returned and the bytes; never the key or the client's headers; never a redirect.
     /// </summary>
-    private async Task PutAsync(JsonObject upload, Image image, CancellationToken ct)
+    private Task PutAsync(JsonObject upload, Image image, CancellationToken ct) =>
+        PutAsync(upload, image.Data!.Value, "image", $"image '{image.Id}'", UploadTimeout, ct);
+
+    /// <summary>
+    /// The <c>PUT</c> of one file's bytes (an image or a document, <paramref name="kind"/>, named
+    /// in messages as <paramref name="what"/>) to its presigned URL, each attempt allowed
+    /// <paramref name="attemptTimeout"/>: exactly the headers the presign returned and the bytes;
+    /// never the key or the client's headers; never a redirect.
+    /// </summary>
+    private async Task PutAsync(JsonObject upload, ReadOnlyMemory<byte> data, string kind, string what, TimeSpan attemptTimeout, CancellationToken ct)
     {
         var url = JsonValues.AsString(upload["url"])!;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
@@ -387,7 +406,7 @@ public sealed partial class DecisionNodeClient
         {
             throw new DecisionNodeError(new ErrorDetails
             {
-                Message = "the storage URL of the upload is not https; the image is not sent",
+                Message = $"the storage URL of the upload is not https; the {kind} is not sent",
             });
         }
         var headers = upload["headers"] as JsonObject ?? new JsonObject();
@@ -396,7 +415,7 @@ public sealed partial class DecisionNodeClient
             int status;
             string text;
             Func<string, string?> header;
-            using (var request = new HttpRequestMessage(HttpMethod.Put, uri) { Content = new ReadOnlyMemoryContent(image.Data!.Value) })
+            using (var request = new HttpRequestMessage(HttpMethod.Put, uri) { Content = new ReadOnlyMemoryContent(data) })
             {
                 foreach (var (name, value) in headers)
                 {
@@ -412,7 +431,7 @@ public sealed partial class DecisionNodeClient
                     }
                 }
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(UploadTimeout);
+                timeout.CancelAfter(attemptTimeout);
                 try
                 {
                     using var response = await Storage.SendAsync(request, timeout.Token).ConfigureAwait(false);
@@ -447,7 +466,7 @@ public sealed partial class DecisionNodeClient
             {
                 Status = status,
                 ErrorType = "upload_failed",
-                Message = $"the upload of image '{image.Id}' to storage failed with {status.ToString(CultureInfo.InvariantCulture)}",
+                Message = $"the upload of {what} to storage failed with {status.ToString(CultureInfo.InvariantCulture)}",
                 Reason = code.Success ? code.Groups[1].Value : null,
             });
         }

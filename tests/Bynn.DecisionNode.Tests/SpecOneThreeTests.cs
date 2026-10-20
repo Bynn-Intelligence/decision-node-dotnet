@@ -26,13 +26,6 @@ public class SpecOneThreeTests
     };
 
     [Fact]
-    public void TheSpecVersionIsOnePointThree()
-    {
-        Assert.Equal("1.3", DecisionNodeClient.SpecVersion);
-        Assert.Equal("0.3.0", DecisionNodeClient.Version);
-    }
-
-    [Fact]
     public async Task BoostersAreSentInTheirWireFormsInOrder()
     {
         var stub = new StubHandler((_, _) => Ok());
