@@ -1252,6 +1252,25 @@ internal static class LocalChecks
         }
     }
 
+    /// <summary>The longest <c>q</c> of an items list, in characters (code points).</summary>
+    internal const int MaxItemQuery = 200;
+
+    /// <summary>
+    /// A knowledge base's items list: <c>q</c> 1 to 200 characters, <c>sort</c> <c>newest</c>,
+    /// <c>oldest</c> or <c>title</c>, each with the API's message.
+    /// </summary>
+    internal static void ItemSearch(string? q, string? sort)
+    {
+        if (q is not null && q.EnumerateRunes().Count() is < 1 or > MaxItemQuery)
+        {
+            throw BadRequest($"Query parameter q must be 1 to {MaxItemQuery} characters.", "api_usage_error", null);
+        }
+        if (sort is not null and not ("newest" or "oldest" or "title"))
+        {
+            throw BadRequest($"Query parameter sort must be newest, oldest or title, got {Printable(sort, 16)}.", "api_usage_error", null);
+        }
+    }
+
     /// <summary>A caller's value as an API message echoes it: its first characters, any but printable ASCII as <c>\u{hex}</c>, then <c>...</c> when it was longer.</summary>
     private static string Printable(string value, int most)
     {

@@ -309,6 +309,12 @@ public class KnowledgeTests
             $"DELETE /v1/collections/{Col}/items?status=failed",
         }, api.Requests.Select(r => $"{r.Method} {r.Uri.PathAndQuery}"));
         await Refused<BadRequestError>(c => c.Collections.ListChunksAsync(Col, ItemId, limit: 101));
+        await dn.Collections.ListItemsAsync(Col, limit: 10, q: "claims policy", sort: "title");
+        Assert.Equal($"/v1/collections/{Col}/items?limit=10&q=claims%20policy&sort=title", api.Requests.Last().Uri.PathAndQuery);
+        var (empty, _) = await Refused<BadRequestError>(c => c.Collections.ListItemsAsync(Col, q: ""));
+        Assert.Equal("Query parameter q must be 1 to 200 characters.", empty.Message);
+        var (sort, _) = await Refused<BadRequestError>(c => c.Collections.ListItemsAsync(Col, sort: "gr\u00f6\u00dfer-als-sechzehn"));
+        Assert.Equal("Query parameter sort must be newest, oldest or title, got gr\\u{f6}\\u{df}er-als-sechz....", sort.Message);
     }
 
     [Fact]

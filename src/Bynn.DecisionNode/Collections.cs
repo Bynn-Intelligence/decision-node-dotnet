@@ -114,12 +114,15 @@ public sealed partial class CollectionsClient
     /// A page of a collection's items (<c>GET /v1/collections/{id}/items</c>), returned as sent;
     /// each argument sent only when given. <paramref name="reference"/> finds the items of one
     /// reference and <paramref name="referencePrefix"/> those whose reference starts with it.
+    /// In a knowledge base, <paramref name="q"/> finds documents whose title, file name or reference
+    /// holds it, ignoring case, and <paramref name="sort"/> orders them: <c>newest</c>, <c>oldest</c> or <c>title</c>.
     /// </summary>
-    /// <exception cref="BadRequestError">An offset below 0, a limit outside 1 to 100, both filters, or a filter not 1 to 64 of <c>A-Z a-z 0-9 _ . : -</c>; nothing is sent.</exception>
-    public Task<JsonObject> ListItemsAsync(string collectionId, int? offset = null, int? limit = null, string? reference = null, string? referencePrefix = null, CancellationToken cancellationToken = default)
+    /// <exception cref="BadRequestError">An offset below 0, a limit outside 1 to 100, both filters, a filter not 1 to 64 of <c>A-Z a-z 0-9 _ . : -</c>, a <paramref name="q"/> not 1 to 200 characters, or a <paramref name="sort"/> not <c>newest</c>, <c>oldest</c> or <c>title</c>; nothing is sent.</exception>
+    public Task<JsonObject> ListItemsAsync(string collectionId, int? offset = null, int? limit = null, string? reference = null, string? referencePrefix = null, string? q = null, string? sort = null, CancellationToken cancellationToken = default)
     {
         LocalChecks.ListPage(offset, limit);
         LocalChecks.ItemFilters(reference, referencePrefix);
+        LocalChecks.ItemSearch(q, sort);
         var query = new List<string>();
         if (offset is { } o)
         {
@@ -136,6 +139,14 @@ public sealed partial class CollectionsClient
         if (referencePrefix is not null)
         {
             query.Add("reference_prefix=" + Uri.EscapeDataString(referencePrefix));
+        }
+        if (q is not null)
+        {
+            query.Add("q=" + Uri.EscapeDataString(q));
+        }
+        if (sort is not null)
+        {
+            query.Add("sort=" + Uri.EscapeDataString(sort));
         }
         var path = Path(collectionId) + "/items" + (query.Count > 0 ? "?" + string.Join("&", query) : string.Empty);
         return ObjectAsync(HttpMethod.Get, path, null, DecisionNodeClient.RetryPolicy.Default, cancellationToken);

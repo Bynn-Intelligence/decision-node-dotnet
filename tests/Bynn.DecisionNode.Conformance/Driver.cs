@@ -246,7 +246,9 @@ public static class Driver
                 args["offset"] is { } io ? (int)io : null,
                 args["limit"] is { } il ? (int)il : null,
                 Text("reference"),
-                Text("reference_prefix"))),
+                Text("reference_prefix"),
+                Text("q"),
+                Text("sort"))),
             "keys.create" => Wrap(client.Keys.CreateAsync(
                 new KeyCreate
                 {
