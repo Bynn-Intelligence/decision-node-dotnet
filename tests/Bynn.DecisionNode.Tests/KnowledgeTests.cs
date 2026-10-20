@@ -236,9 +236,9 @@ public class KnowledgeTests
         Same("""
             [{"type":"string_too_long","loc":["body","title"],"msg":"A title is 1 to 200 characters","input":"tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt..."},
              {"type":"literal_error","loc":["body","format"],"msg":"Input should be 'markdown' or 'text'","input":"html"},
-             {"type":"string_pattern_mismatch","loc":["body","reference"],"msg":"String should match pattern '^[A-Za-z0-9_.:-]{1,64}$'","input":"a b"},
+             {"type":"string_pattern_mismatch","loc":["body","reference"],"msg":"String should match pattern '^[A-Za-z0-9_.:-]{1,64}$'","input":"a b","ctx":{"pattern":"^[A-Za-z0-9_.:-]{1,64}$"}},
              {"type":"int_range","loc":["body","pin_rank"],"msg":"Input should be an integer from 0 to 1000","input":1001},
-             {"type":"string_too_long","loc":["body","label"],"msg":"A label is 1 to 128 characters with no control or invisible characters","input":""},
+             {"type":"string_too_short","loc":["body","label"],"msg":"String should have at least 1 character","input":"","ctx":{"min_length":1}},
              {"type":"value_error","loc":["body","metadata"],"msg":"A metadata key is 1 to 40 characters of a-z, 0-9 and _: \"Bad\".","input":null}]
             """, many.Entries);
 
@@ -255,12 +255,17 @@ public class KnowledgeTests
     [Fact]
     public async Task AFileIsCheckedAsThePresignChecksIt()
     {
-        var (type, _) = await Refused<BadRequestError>(c => c.Collections.AddDocumentAsync(Col, Document.FromBytes(new byte[] { 1, 2, 3 })));
-        Assert.Equal("files[0].content_type: must be one of text/plain, text/markdown, application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.presentationml.presentation, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, text/html, image/png, image/jpeg, image/tiff, image/webp.", type.Message);
+        var (type, _) = await Refused<BadRequestError>(c => c.Collections.AddDocumentAsync(Col, Document.FromBytes(new byte[] { 1, 2, 3 }, "image/gif")));
+        Assert.Equal("files[0].content_type: must be one of text/plain, text/markdown, application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.presentationml.presentation, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, text/html, image/png, image/jpeg, image/tiff, image/webp, got image/gif.", type.Message);
         Assert.Equal("api_usage_error", type.ErrorType);
 
+        var (dn, api, _) = Make();
+        using var _ = dn;
+        await Assert.ThrowsAsync<ArgumentException>(() => dn.Collections.AddDocumentAsync(Col, Document.FromBytes(new byte[] { 1, 2, 3 }), "Untold"));
+        Assert.Empty(api.Requests);
+
         var (empty, _) = await Refused<BadRequestError>(c => c.Collections.AddDocumentAsync(Col, Document.FromBytes(Array.Empty<byte>(), Pdf)));
-        Assert.Equal("files[0].byte_size: must be at least 1.", empty.Message);
+        Assert.Equal("files[0].byte_size: must be an integer from 1 to 52428800.", empty.Message);
 
         var (large, _) = await Refused<BadRequestError>(c => c.Collections.AddDocumentAsync(Col, Document.FromStream(new MemoryStream(PdfBytes(52_428_801)), Pdf)));
         Assert.Equal("files[0].byte_size: 52428801 is over the limit of 52428800 bytes.", large.Message);

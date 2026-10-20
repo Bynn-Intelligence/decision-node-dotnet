@@ -420,6 +420,18 @@ public sealed class ConformanceTests
         {
             Match(Canon(sessionExp), Canon(Driver.Session((Session)result!)), "session");
         }
+        else if (exp["knowledge"] is { } knowledge)
+        {
+            if (result is not KnowledgeReading reading)
+            {
+                throw Fail($"knowledge: expected a knowledge reading, got {Describe(result)}");
+            }
+            Match(Canon(knowledge), Canon(Driver.Knowledge(reading)), "knowledge");
+        }
+        else if (exp["chunk_page"] is { } chunkPage)
+        {
+            Match(Canon(chunkPage), Canon(result as JsonObject), "chunk_page");
+        }
         else if (exp["upload_ids"] is { } ids)
         {
             var got = Driver.Normalise(result);

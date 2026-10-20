@@ -201,8 +201,8 @@ public sealed class Document
 
     /// <summary>
     /// The file's bytes, content type and name, read now; the faults the presign would answer,
-    /// raised before anything is sent: a type that is not a document type or cannot be told,
-    /// an empty file, a file over <see cref="MaxFileBytes"/>.
+    /// raised before anything is sent: a type that is not a document type, an empty file, a file
+    /// over <see cref="MaxFileBytes"/>. A type that cannot be told is an <see cref="ArgumentException"/>.
     /// </summary>
     /// <param name="index">The file's place in the presign, for the messages.</param>
     /// <param name="ct">Cancels the read.</param>
@@ -264,13 +264,18 @@ public sealed class Document
     private static DocumentFile Checked(int index, byte[] data, string? contentType, string? filename)
     {
         // The presign's order: the content type, then the size.
-        if (contentType is null || !ContentTypes.Contains(contentType, StringComparer.Ordinal))
+        if (contentType is null)
         {
-            throw LocalChecks.BadRequest($"files[{index}].content_type: must be one of {string.Join(", ", ContentTypes)}.", "api_usage_error");
+            throw new ArgumentException(
+                "the document's type cannot be told from its name or its first bytes: give contentType or filename", "document");
+        }
+        if (!ContentTypes.Contains(contentType, StringComparer.Ordinal))
+        {
+            throw LocalChecks.BadRequest($"files[{index}].content_type: must be one of {string.Join(", ", ContentTypes)}, got {contentType}.", "api_usage_error");
         }
         if (data.Length == 0)
         {
-            throw LocalChecks.BadRequest($"files[{index}].byte_size: must be at least 1.", "api_usage_error");
+            throw LocalChecks.BadRequest($"files[{index}].byte_size: must be an integer from 1 to {MaxFileBytes}.", "api_usage_error");
         }
         if (data.Length > MaxFileBytes)
         {

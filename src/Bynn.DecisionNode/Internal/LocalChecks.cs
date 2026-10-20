@@ -1083,21 +1083,27 @@ internal static class LocalChecks
         }
     }
 
-    /// <summary>The fields a text item's write shares, in the API's order, with the text route's words.</summary>
+    /// <summary>The fields a text item's write shares, in the API's order; a reference and a label in an enrollment's words.</summary>
     private static IEnumerable<JsonNode?> TextFields(string? reference, int? pinRank, string? label, JsonObject? metadata)
     {
-        if (reference is not null && !ItemReference.IsMatch(reference))
+        if (reference is not null)
         {
-            yield return Entry("string_pattern_mismatch", new JsonArray("body", "reference"), $"String should match pattern '{ItemReferencePattern}'", Echoed(reference));
+            foreach (var entry in StringEntries(new JsonArray("body", "reference"), reference, MaxItemReference, ItemReferencePattern))
+            {
+                yield return entry;
+            }
         }
         if (pinRank is < 0 or > MaxPinRank)
         {
             yield return Entry("int_range", new JsonArray("body", "pin_rank"), $"Input should be an integer from 0 to {MaxPinRank}", JsonValue.Create(pinRank.Value));
         }
-        if (label is not null && (label.Length == 0 || label.EnumerateRunes().Count() > MaxItemLabel))
+        if (label is not null)
         {
             // Its control or invisible characters are the server's to judge.
-            yield return Entry("string_too_long", new JsonArray("body", "label"), $"A label is 1 to {MaxItemLabel} characters with no control or invisible characters", Echoed(label));
+            foreach (var entry in StringEntries(new JsonArray("body", "label"), label, MaxItemLabel, null))
+            {
+                yield return entry;
+            }
         }
         if (metadata is not null)
         {

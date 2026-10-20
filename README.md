@@ -491,7 +491,7 @@ A knowledge call, a decision naming the booster or a search, costs USD 0.001, on
 | `BadRequestError` `upload_purpose_mismatch` | An image upload named as a document, or a document upload named as an image |
 | `PermissionDeniedError` `key_scope_denied` | A search, `includeText` or a document upload from a key that is not full-scope |
 
-The library checks what it can before sending, as the API would answer it, with nothing sent: a missing or out-of-bounds title (1 to 200 characters), an empty text, a format other than `markdown` or `text`, a pin rank outside 0 to 1,000, a reference, label or metadata out of bounds and a scope key not of `^[a-z0-9_]{1,40}$` (`ValidationError`); a file that is empty, over 50 MB, or of a type that is not a document's or cannot be told (`BadRequestError` `api_usage_error`).
+The library checks what it can before sending, as the API would answer it, with nothing sent: a missing or out-of-bounds title (1 to 200 characters), an empty text, a format other than `markdown` or `text`, a pin rank outside 0 to 1,000, a reference, label or metadata out of bounds and a scope key not of `^[a-z0-9_]{1,40}$` (`ValidationError`); a file that is empty, over 50 MB, or of a type that is not a document's (`BadRequestError` `api_usage_error`). A file whose type cannot be told from its name or its first bytes is an `ArgumentException`.
 
 ## Fine-tuned models
 
