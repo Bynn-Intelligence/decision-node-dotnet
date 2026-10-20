@@ -4,7 +4,7 @@ All notable changes to this library are documented here. The format follows [Kee
 
 ## [0.4.1] - Unreleased
 
-Implements version 1.4 of the DecisionNode SDK specification (`SpecVersion` is `"1.4"`): knowledge.
+Implements version 1.4 of the DecisionNode SDK specification (`SpecVersion` is `"1.4"`): knowledge. The project file says 0.4.0; the release workflow publishes it as 0.4.1, the version `DecisionNodeClient.Version` and the User-Agent carry.
 
 ### Added
 

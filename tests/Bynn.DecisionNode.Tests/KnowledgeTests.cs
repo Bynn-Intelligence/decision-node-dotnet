@@ -68,6 +68,7 @@ public class KnowledgeTests
     public void TheSpecVersionIsOnePointFour()
     {
         Assert.Equal("1.4", DecisionNodeClient.SpecVersion);
+        Assert.Equal("0.4.1", DecisionNodeClient.Version);
     }
 
     [Fact]

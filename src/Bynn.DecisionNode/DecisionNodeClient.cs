@@ -29,7 +29,7 @@ namespace Bynn.DecisionNode;
 public sealed partial class DecisionNodeClient : IDisposable
 {
     /// <summary>This library's version, sent in the User-Agent header.</summary>
-    public const string Version = "0.3.0";
+    public const string Version = "0.4.1";
 
     /// <summary>The version of the DecisionNode SDK specification this library implements.</summary>
     public const string SpecVersion = "1.4";
