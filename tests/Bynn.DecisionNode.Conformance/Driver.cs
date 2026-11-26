@@ -959,6 +959,8 @@ public static class Driver
     private static JsonObject DecisionUsage(Usage u) => new()
     {
         ["input_tokens"] = u.InputTokens,
+        ["image_tokens"] = u.ImageTokens,
+        ["video_tokens"] = u.VideoTokens,
         ["output_tokens"] = u.OutputTokens,
         ["video_frames"] = u.VideoFrames,
         ["video_seconds"] = u.VideoSeconds,

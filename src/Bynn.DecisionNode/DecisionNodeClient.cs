@@ -29,10 +29,10 @@ namespace Bynn.DecisionNode;
 public sealed partial class DecisionNodeClient : IDisposable
 {
     /// <summary>This library's version, sent in the User-Agent header.</summary>
-    public const string Version = "0.4.1";
+    public const string Version = "0.5.1";
 
     /// <summary>The version of the DecisionNode SDK specification this library implements.</summary>
-    public const string SpecVersion = "1.4";
+    public const string SpecVersion = "1.5";
 
     /// <summary>
     /// Local image bytes in one request (or one session frame, or one batch line) that

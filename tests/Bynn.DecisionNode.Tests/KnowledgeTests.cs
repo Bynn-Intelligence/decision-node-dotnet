@@ -65,13 +65,6 @@ public class KnowledgeTests
     }
 
     [Fact]
-    public void TheSpecVersionIsOnePointFour()
-    {
-        Assert.Equal("1.4", DecisionNodeClient.SpecVersion);
-        Assert.Equal("0.4.1", DecisionNodeClient.Version);
-    }
-
-    [Fact]
     public async Task ATextCollectionIsCreatedWithItsScopeKey()
     {
         var (dn, api, _) = Make((_, _) => Json(201, """{"id":"col_1","type":"text"}"""));

@@ -108,7 +108,9 @@ var results = await dn.DecideManyAsync(tickets.Select(t => new DecideRequest
 }));
 ```
 
-Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings`, `Evidence`, `Fallback` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos); for a request with boosters, `Evidence`, `Usage.BoosterTokens` and `Usage.Boosters` say what the boosters read (see Boosters).
+Each `Decision` also carries `Model` (the version that answered), `Usage.InputTokens`, `Usage.ImageTokens`, `Usage.VideoTokens`, `Usage.OutputTokens`, `RequestId`, `LatencyMs` (the server's), `Safety`, `Warnings`, `Evidence`, `Fallback` and `Raw` (the parsed body). A latency or token count the server did not send is `null`, never 0. For a request with videos, `Usage.VideoFrames` and `Usage.VideoSeconds` say how much of the videos was read (see Videos); for a request with boosters, `Evidence`, `Usage.BoosterTokens` and `Usage.Boosters` say what the boosters read (see Boosters).
+
+`Usage.ImageTokens` and `Usage.VideoTokens` are the shares of `Usage.InputTokens` that came from images and from videos, read from the `x-decisionnode-image-tokens` and `x-decisionnode-video-tokens` headers, so you can bill or budget vision tokens at your own price. Both are `long?`: `ImageTokens` is `null` for a request without images and `VideoTokens` is `null` for a request without videos (the server sends each header only when its share is above 0), and either is `null` when its header is not a whole number from 0 to 2^31 - 1. They are read as sent: the library never adds them to, or takes them from, another count, and never prices them. A batch result's decision reads `null` for both.
 
 `Usage.Cost` is what the answer cost, in USD exactly as the API booked it: `Usd` (the amount debited for this answer), `ModelUsd` (the model's part, 0 when the free tier covered it), `BoostersUsd` (the boosters' part) and `FreeTier` (`true` when the free tier covered the model's part). Read `Usd` as given rather than adding the parts, since the parts summed as doubles can differ from the booked amount in the last digit. Batch result lines and session replies carry their own `Usage.Cost`. It is `null` when the response does not carry it.
 
@@ -748,7 +750,7 @@ The library sends no telemetry and no request other than to the base URL, the st
 
 ## Versioning
 
-This library implements version 1.4 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
+This library implements version 1.5 of the DecisionNode SDK specification (`DecisionNodeClient.SpecVersion`), the same surface every official DecisionNode SDK implements, checked by a shared conformance suite. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 
@@ -760,7 +762,7 @@ dotnet test tests/Bynn.DecisionNode.Tests
 DECISIONNODE_CONFORMANCE_DIR=/path/to/decision-node-conformance dotnet test tests/Bynn.DecisionNode.Conformance
 ```
 
-The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.27); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
+The conformance tests start the DecisionNode conformance suite's mock server and run every case of its five kinds (requests, responses, errors, behaviour, constants) against it. Error cases that name `catch_as` are caught through a `catch (DecisionNodeError)` clause. They need Python 3.10 or later and `DECISIONNODE_CONFORMANCE_DIR` set to a checkout of the suite (version 1.28); without it every conformance test fails, none is skipped. CI checks the suite out at the commit pinned in `DECISIONNODE_CONFORMANCE_REF` in `.github/workflows/ci.yml`, with `persist-credentials: false`, and runs it on every push. Every action in the workflow is pinned to a commit SHA.
 
 ## License
 

@@ -28,7 +28,11 @@ public sealed class Decision
             throw new DecisionNodeError("the response field 'answers' is not a JSON object");
         }
         Answers = new ReadOnlyDictionary<string, Answer>(answers);
-        Usage = Session.UsageOf(body["usage"]) ?? new Usage(null, null);
+        Usage = (Session.UsageOf(body["usage"]) ?? new Usage(null, null)) with
+        {
+            ImageTokens = TokenHeader(header("x-decisionnode-image-tokens")),
+            VideoTokens = TokenHeader(header("x-decisionnode-video-tokens")),
+        };
         var warnings = new List<string>();
         if (body["warnings"] is JsonArray sent)
         {
@@ -48,6 +52,36 @@ public sealed class Decision
         Fallback = header("x-decisionnode-fallback") is { } served
             ? new Fallback(served, header("x-decisionnode-requested-model"))
             : null;
+    }
+
+    /// <summary>The largest token count a header may carry, 2^31 - 1.</summary>
+    private const long MaxHeaderTokens = int.MaxValue;
+
+    /// <summary>
+    /// A token count from a header: digits only after trimming spaces, from 0 to 2^31 - 1.
+    /// Anything else (absent, empty, a sign, a fraction, too large) is <c>null</c>.
+    /// </summary>
+    internal static long? TokenHeader(string? value)
+    {
+        var digits = value?.Trim();
+        if (string.IsNullOrEmpty(digits))
+        {
+            return null;
+        }
+        long n = 0;
+        foreach (var c in digits)
+        {
+            if (c is < '0' or > '9')
+            {
+                return null;
+            }
+            n = (n * 10) + (c - '0');
+            if (n > MaxHeaderTokens)
+            {
+                return null;
+            }
+        }
+        return n;
     }
 
     /// <summary>The answers, by question id.</summary>
@@ -137,7 +171,17 @@ public sealed class Decision
 /// <param name="BoosterTokens">The share of <paramref name="InputTokens"/> the boosters' readings take; <c>null</c> for a request without boosters.</param>
 /// <param name="Boosters">The booster calls billed; <c>null</c> for a request without boosters.</param>
 /// <param name="Cost">What the answer cost, as the API sent it; <c>null</c> when the response does not say.</param>
-public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null, long? BoosterTokens = null, long? Boosters = null, Cost? Cost = null);
+/// <param name="ImageTokens">
+/// The share of <paramref name="InputTokens"/> that came from images, from the <c>x-decisionnode-image-tokens</c>
+/// header, as sent: never added to or taken from another count, and never priced. <c>null</c> for a request without
+/// images (the server sends the header only when the share is above 0), when the header is not a whole number from
+/// 0 to 2^31 - 1, and on a batch result or a session reply.
+/// </param>
+/// <param name="VideoTokens">
+/// The share of <paramref name="InputTokens"/> that came from videos, from the <c>x-decisionnode-video-tokens</c>
+/// header, read as <paramref name="ImageTokens"/> is. <c>null</c> for a request without videos.
+/// </param>
+public sealed record Usage(long? InputTokens, long? OutputTokens, long? VideoFrames = null, double? VideoSeconds = null, long? BoosterTokens = null, long? Boosters = null, Cost? Cost = null, long? ImageTokens = null, long? VideoTokens = null);
 
 /// <summary>
 /// What one answer cost (<c>usage.cost</c>), every amount in USD exactly as the API sent it: the

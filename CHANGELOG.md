@@ -2,6 +2,20 @@
 
 All notable changes to this library are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - Unreleased
+
+Implements version 1.5 of the DecisionNode SDK specification (`SpecVersion` is `"1.5"`): the image and video shares of the input tokens, so callers can bill or budget vision tokens at their own price. The project file says 0.5.0; the release workflow publishes it as 0.5.1, the version `DecisionNodeClient.Version` and the User-Agent carry.
+
+### Added
+
+- `Usage.ImageTokens` and `Usage.VideoTokens` (`long?`): the share of `Usage.InputTokens` that came from images and from videos, read from the `x-decisionnode-image-tokens` and `x-decisionnode-video-tokens` response headers on every call that returns a `Decision`. Each is `null` when its header is absent (the server sends it only for a request with images or videos), empty, or not a whole number from 0 to 2^31 - 1 after trimming spaces; such a header never fails the decision. Both are read as sent, never added to or taken from another count and never priced. A batch result's decision reads `null`, since its line carries no such headers. `Raw` is unchanged.
+
+### Changed
+
+- `SpecVersion` is `"1.5"`.
+- `Usage` takes `ImageTokens` and `VideoTokens` as two optional parameters after `Cost`; code that constructs or deconstructs a `Usage` by position is rebuilt against the new shape.
+- CI runs conformance suite 1.28.
+
 ## [0.4.1] - Unreleased
 
 Implements version 1.4 of the DecisionNode SDK specification (`SpecVersion` is `"1.4"`): knowledge. The project file says 0.4.0; the release workflow publishes it as 0.4.1, the version `DecisionNodeClient.Version` and the User-Agent carry.

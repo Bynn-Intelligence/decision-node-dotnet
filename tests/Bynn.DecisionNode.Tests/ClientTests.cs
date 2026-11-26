@@ -168,7 +168,7 @@ public class ClientTests
     [Fact]
     public void SpecVersionAndInlineThreshold()
     {
-        Assert.Equal("1.4", DecisionNodeClient.SpecVersion);
+        Assert.Equal("1.5", DecisionNodeClient.SpecVersion);
         Assert.Equal(524288, DecisionNodeClient.DefaultInlineThreshold);
     }
 
