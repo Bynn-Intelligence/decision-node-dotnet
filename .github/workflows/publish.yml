@@ -1,8 +1,9 @@
 # Runs only while the repository is public (nothing is bumped, tagged or published while it is private), and checks the files to publish for internal names before anything is pushed or published.
 #
 # Auto-release Bynn.DecisionNode on every push to main: bump the patch in the
-# csproj, run the tests, pack, push to NuGet, push the bump commit and tag back
-# to main, and cut the GitHub release. The push back uses the default
+# csproj, run the tests, pack, push to NuGet, and only then push the bump
+# commit and tag back to main and cut the GitHub release, so a refused upload
+# leaves no tag behind. The push back uses the default
 # GITHUB_TOKEN, which does not retrigger this workflow, and the bump commit
 # carries [skip publish] as a second guard.
 #
@@ -11,8 +12,12 @@
 #
 # The tests here are the unit tests; the conformance suite runs in ci.yml.
 #
-# Needs: the NUGET_API_KEY secret (an API key from nuget.org scoped to push
-# Bynn.DecisionNode).
+# Publishes with NuGet Trusted Publishing: the job's GitHub OIDC token is
+# exchanged for a NuGet API key that lasts one hour (NuGet/login), so no
+# long-lived key is stored. Needs, on nuget.org, a Trusted Publishing policy
+# of the package's owner for this repository, the workflow file publish.yml
+# and the environment nuget-publish, and the repository variable NUGET_USER
+# (the nuget.org user name, not an email address) of a member of that owner.
 name: Publish to NuGet
 
 on:
@@ -33,6 +38,7 @@ jobs:
     environment: nuget-publish
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -64,15 +70,21 @@ jobs:
           set -- src/Bynn.DecisionNode/bin/Release/Bynn.DecisionNode."$VERSION".nupkg src/Bynn.DecisionNode/bin/Release/Bynn.DecisionNode."$VERSION".snupkg
           python3 .github/scripts/check_names.py --commits "$@" README.md
 
+      - name: NuGet login (OIDC to a one-hour API key)
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - run: dotnet nuget push "src/Bynn.DecisionNode/bin/Release/Bynn.DecisionNode.${{ steps.bump.outputs.version }}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+
       - run: |
           git add src/Bynn.DecisionNode/Bynn.DecisionNode.csproj
           git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
-
-      - run: dotnet nuget push "src/Bynn.DecisionNode/bin/Release/Bynn.DecisionNode.${{ steps.bump.outputs.version }}.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
 
       - run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
         env:
